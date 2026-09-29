@@ -1,0 +1,111 @@
+# The places Polish speaks at that Italian does not, written for Polish rather
+# than lifted for Italian. A locus rule says where the formants go; the rule
+# for a phoneme sets its source and then calls one of these.
+#
+# The numbers are a starting point and the ear settles them. What they are
+# read off is Italian's own: its palatal locus is f2 1800 and f3 2400, its
+# dentals 1700 and 2600, and a labial's low second formant 850 -- so the
+# language's own numbers say what scale these are on.
+
+# Polish sz, ż, cz and dż are retroflex, articulated further back than the
+# palato-alveolars Italian spells with sc and gi. The signature of a retroflex
+# is a low third formant, so f3 sits below the soft series' and f2 below it
+# too. Nothing here touches the first formant: the rule for the phoneme sets
+# that before it asks for a place.
+#
+# The numbers are the ear's, not a textbook's. Three settings were built and
+# listened to on the same five words -- 1700 and 2200, 1600 and 1900, 1800 and
+# 2500 -- and the last was the one that sounded like Polish. Which says the
+# first two were too far back for this synthesiser rather than too far back for
+# the language: Italian's own palatal locus is 1800 and 2400, and what came out
+# best is a hair above it.
+rule pol_retroflex_Fv takes 1 from is_val.obj
+  call ZZfence_null
+  set f2_in to 1800
+  set f2_out to 1800
+  set f3_in to 2500
+  set f3_out to 2500
+  match
+end
+
+# And the soft series -- ś, ź, ć, dź -- which is further forward than either,
+# with a third formant higher than the palatal's rather than lower. These
+# numbers went to the ear the same way the hard pair's did: 2000 and 2700, 2100
+# and 3000, 2200 and 3200, on the same five words with the hard pair held
+# still, and the highest of the three was the one that sounded like Polish. It
+# is seven hundred hertz clear of the hard series, which is what keeps kasza
+# and Kasia apart. This is
+# what Italian's own S and Z ask for now: their record says palatal and that is
+# what the soft series is, so the two of them serve it as they stand.
+# pol_sibilant_Fv below is what chooses between the two places.
+rule pol_alveolopalatal_Fv takes 1 from is_val.obj
+  call ZZfence_null
+  set f2_in to 2200
+  set f2_out to 2200
+  set f3_in to 3200
+  set f3_out to 3200
+  match
+end
+
+# Which of the two sibilant places the phone about to be spoken wants.
+#
+# Polish has two series where Italian has one. The hard one -- sz, ż, cz, dż --
+# is retroflex, the tongue curled back, and the soft one -- ś, ź, ć, dź -- is
+# palatal, the tongue flat against the palate. They are different letters and
+# different words: kasza is not Kasia.
+#
+# Italian's S and Z are palatal and IBM's own table says so, `place_of_artic
+# pal', so those two serve the soft series as they stand. The hard series has
+# to be two more phonemes and there is nowhere to put a new one: a phoneme
+# code is tested by name in some five hundred places across the module -- every
+# locus rule asks what its neighbours are, every vowel asks what consonant
+# follows it, the durations and the syllabifier ask too -- and a code that has
+# never existed is invisible to all of them. So the hard series took over the
+# two of Italian's that no Polish word can reach: L, its palatal l from gli,
+# and R, its strong trill. Their records now say fricative and retroflex, and
+# the value chain hands them to Italian's own fricative rules.
+#
+# Which leaves one thing for a rule to decide, and this is it. ital_ph_S and
+# ital_ph_Z ask for a place; the place depends on which of the two phones is
+# being spoken, and the phone is the one after the position the language keeps
+# in the variable this scan is loaded from.
+rule pol_sibilant_Fv takes 1 from is_val.obj
+  call ZZfence_null
+  call ZZlpta_load_vvg__setscan_0103r__2
+  if answer is 0
+    call ZZtest_string_s_2_1_ZZstring113        # the hard sz
+    if answer is 0
+      call pol_retroflex_Fv
+      match
+    end
+  end
+  call ZZlpta_load_vvg__setscan_0103r__2
+  if answer is 0
+    call ZZtest_string_s_2_1_ZZstring103        # and the hard ż
+    if answer is 0
+      call pol_retroflex_Fv
+      match
+    end
+  end
+  # /x/ goes through the same fricative rule and wants the velar place, which
+  # is Italian's own -- it is where k and g are spoken.
+  call ZZlpta_load_vvg__setscan_0103r__2
+  if answer is 0
+    call pol_test_x
+    if answer is 0
+      call ital_velar_Fv
+      match
+    end
+  end
+  call pol_alveolopalatal_Fv
+  match
+end
+
+# Whether the phone about to be spoken is Polish's /x/, the sound ch and h
+# stand for. It has a code of its own -- there was nothing left to retake --
+# and Italian's voiceless fricative rule speaks it, because that is what it is:
+# the same manner as its sz and s, at a different place.
+rule pol_test_x takes 1 from is_val.obj
+  bare
+  call test_string_s 2 1 sym pol_ph_x
+end

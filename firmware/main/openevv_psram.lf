@@ -1,0 +1,12 @@
+[scheme:openevv_psram]
+entries:
+    text -> flash_text
+    rodata -> flash_rodata
+    data -> dram0_data
+    bss -> extern_ram
+    common -> extern_ram
+
+[mapping:openevv_psram]
+archive: libmain.a
+entries:
+    * (openevv_psram)

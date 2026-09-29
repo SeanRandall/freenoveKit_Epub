@@ -1,0 +1,334 @@
+# The language's dictionaries. Written by tools/delta-dict.py from the tables
+# and the rules, and read back by it to lay them down again.
+#
+# One section per dictionary, and inside it one entry per line, indented: the
+# word, then the two counts the rule steps the spine by, then the action
+# number it dispatches on, then what it says.
+#
+# What it says is written in ETI's phone letters where the section says sound,
+# spaced one phone apart, and in the language's own characters where it says
+# characters. A word laid down in more than one piece has its pieces written
+# out in order with `then' between them -- the currencies spell an
+# abbreviation, then a space, then a name -- and any piece the rule names
+# itself rather than the word is shared with every word using it and cannot be
+# changed for one of them, and neither can one the rule that lays it names for
+# itself, which is how a suffix that always says the same thing is written.
+# A word read one way before one thing and another
+# way before another has both written out with `or' between them; those are
+# shown as they are and cannot be changed, since which of the two is taken is
+# decided in code the other words using that test run through. A phone or a character that no name picks out on its own is
+# written as a hash and its number. An entry with nothing after its action
+# lays no record down, or lays one down a way this cannot yet read.
+#
+# To add a word, put a line in with the word `new' where its action number
+# goes and say what it is to sound like. Building gives it an action of its
+# own and writes the number back here. `delta-dict.py where <dictionary>
+# <word>' says which two words it belongs between, and `delta-dict.py find
+# <word>' says which dictionaries hold it and what each says it sounds like.
+#
+# What a word says belongs to its action rather than to the word, so two words
+# sharing an action say the same thing. Give one of them something else to say
+# and it is moved onto an action of its own, and building says so.
+#
+# The order is the one the engine searches in, which is by the language's own
+# character codes rather than by letter, so the vowels come first. A word put
+# in the wrong place will not be found; building says so rather than laying
+# down a dictionary that cannot be read.
+#
+# A word is written as its characters. A character the alphabet does not
+# spell as one ordinary letter is written in brackets, by name where that
+# name belongs to one code alone and by number where two codes share it.
+
+dictionary ital_funct_words statement 1 width 0 records sound
+
+dictionary proclitics statement 1 width 0 records sound
+
+dictionary prod_prefixes statement 1 width 0 records sound
+  auto 255 255 6 says a w t o
+  anfi 255 255 1 says a n f i
+  ante 255 255 2 says a n t e
+  anti 255 255 3 says a n t i
+  arci 255 255 5 says a r C i
+  archi 255 255 4 says a r k i
+  emi 255 255 15 says e m i
+  endo 255 255 16 says e n d o
+  entro 255 255 17 says e n t r o
+  extra 255 255 18 says e k s t r a
+  il 255 255 21 says i l
+  im 255 255 22 says i m
+  infra 255 255 23 says i n f r a
+  inter 255 255 25 says i n t E r
+  intra 255 255 24 says i n t r a
+  iper 255 255 26 says i p E r
+  ipo 255 255 27 says i p o
+  ir 255 255 28 says i r
+  oltre 255 255 40 says o l t r e
+  ultra 255 255 60 says u l t r a
+  bi 255 255 7 says b i
+  cardio 255 255 8 says k a r d y o
+  circum 255 255 9 says C i r k u m
+  co 255 255 10 says k o
+  contra 255 255 11 says k o n t r a
+  contro 255 255 12 says k o n t r o
+  de 255 255 13 says d e
+  dis 255 255 14 says d i z or d i s
+  foto 255 255 19 says f o t o
+  fuori 255 255 20 says f w c r i
+  lique 255 255 29 says l i k w e
+  mal 255 255 30 says m a l
+  male 255 255 31 says m a l e
+  meta 255 255 32 says m e t a
+  mezza 255 255 33 says m E d D a
+  mezzo 255 255 34 says m E d D o
+  micro 255 255 35 says m i k r c
+  mini 255 255 36 says m i n i
+  mono 255 255 37 says m o n c
+  moto 255 255 38 says m o t o
+  non 255 255 39 says n c n
+  para 255 255 41 says p a r a
+  porta 255 255 42 says p o r t a
+  post 255 255 45 says p o s t
+  pre 255 255 43 says p r e
+  pro 255 255 44 says p r o
+  radio 255 255 46 says r a d y o
+  retro 255 255 47 says r e t r c
+  ri 255 255 48 says r i
+  senza 255 255 49 says s E n T a
+  sopra 255 255 50 says s o p r a
+  sotto 255 255 51 says s o t t o
+  sovra 255 255 52 says s o v r a
+  sub 255 255 54 says s u b
+  super 255 255 55 says s u p E r
+  sur 255 255 56 says s u r
+  stra 255 255 53 says s t r a
+  tele 255 255 57 says t e l e
+  trans 255 255 58 says t r a n s
+  tri 255 255 59 says t r i
+  vice 255 255 61 says v i C e
+
+dictionary assign_enclitic_pronun statement 1 width 0 records sound
+
+dictionary ital_numbers statement 1 width 0 records sound
+
+dictionary ital_roots statement 1 width 0 records sound
+
+dictionary ital_abbr statement 1 width 0 records characters
+
+dictionary ital_char_name statement 1 width 0 records characters
+  a 255 255 212
+  e 255 255 216
+  i 255 255 220
+  o 255 255 226
+  u 255 255 232
+  A 255 255 212
+  E 255 255 216
+  I 255 255 220
+  O 255 255 226
+  U 255 255 232
+  b 255 255 213
+  c 255 255 214
+  d 255 255 215
+  f 255 255 217
+  g 255 255 218
+  h 255 255 219
+  j 255 255 221
+  k 255 255 222
+  l 255 255 223
+  m 255 255 224
+  n 255 255 225
+  p 255 255 227
+  q 255 255 228
+  r 255 255 229
+  s 255 255 230
+  t 255 255 231
+  v 255 255 233
+  w 255 255 234
+  x 255 255 235
+  y 255 255 236
+  z 255 255 237
+  B 255 255 213
+  C 255 255 214
+  D 255 255 215
+  F 255 255 217
+  G 255 255 218
+  H 255 255 219
+  J 255 255 221
+  K 255 255 222
+  L 255 255 223
+  M 255 255 224
+  N 255 255 225
+  P 255 255 227
+  Q 255 255 228
+  R 255 255 229
+  S 255 255 230
+  T 255 255 231
+  V 255 255 233
+  W 255 255 234
+  X 255 255 235
+  Y 255 255 236
+  Z 255 255 237
+  0 255 255 1 says zero
+  1 255 255 2
+  2 255 255 3 says due
+  3 255 255 4 says tre
+  4 255 255 5 says quattro
+  5 255 255 6 says cinque
+  6 255 255 7 says sei
+  7 255 255 8 says sette
+  8 255 255 9 says otto
+  9 255 255 10 says nove
+  - 255 255 55 says meno or trattino[ ]d'unione
+  , 255 255 70 says virgola
+  . 255 255 71 says punto
+  ? 255 255 72 says punto[ ]di[ ]domanda
+  : 255 255 64 says due[ ]punti
+  ; 255 255 65 says punto[ ]e[ ]virgola
+  ! 255 255 44 says punto[ ]esclamativo
+  ( 255 255 53 says aperta[ ]parentesi[ ]tonda
+  ) 255 255 54 says chiusa[ ]parentesi[ ]tonda
+  ' 255 255 67 says apostrofo
+  # 255 255 47 says diesis
+  _ 255 255 56 says sottolineato
+  [#76] 255 255 75 says apostrofo[ ]inverso
+  ~ 255 255 52 says tilde
+  * 255 255 51 says asterisco
+  @ 255 255 45 says chiocciola
+  [#80] 255 255 60 says aperta[ ]parentesi[ ]quadra
+  [#81] 255 255 61 says chiusa[ ]parentesi[ ]quadra
+  { 255 255 62 says aperta[ ]parentesi[ ]graffa
+  } 255 255 63 says chiusa[ ]parentesi[ ]graffa
+  $ 255 255 48 says dollaro
+  + 255 255 57 says pi[ù]
+  % 255 255 49 says per[ ]cento
+  / 255 255 73 says barra
+  = 255 255 58 says uguale
+  ^ 255 255 46 says accento[ ]circonflesso
+  & 255 255 50 says e
+  | 255 255 59 says sbarra
+  \ 255 255 74 says barra[ ]inversa
+  < 255 255 68 says aperta[ ]parentesi[ ]uncinata
+  > 255 255 69 says chiusa[ ]parentesi[ ]uncinata
+  " 255 255 66 says virgolette
+  [à] 255 255 12 says ah[ ]con[ ]accento[ ]grave
+  [è] 255 255 18 says eh[ ]con[ ]accento[ ]grave
+  [ì] 255 255 23 says ih[ ]con[ ]accento[ ]grave
+  [ò] 255 255 30 says oh[ ]con[ ]accento[ ]grave
+  [ù] 255 255 38 says u[ ]con[ ]accento[ ]grave
+  [À] 255 255 12 says ah[ ]con[ ]accento[ ]grave
+  [È] 255 255 18 says eh[ ]con[ ]accento[ ]grave
+  [Ì] 255 255 23 says ih[ ]con[ ]accento[ ]grave
+  [Ò] 255 255 30 says oh[ ]con[ ]accento[ ]grave
+  [Ù] 255 255 38 says u[ ]con[ ]accento[ ]grave
+  [á] 255 255 121 says ah[ ]con[ ]accento[ ]acuto
+  [é] 255 255 17 says eh[ ]con[ ]accento[ ]acuto
+  [í] 255 255 139 says ih[ ]con[ ]accento[ ]acuto
+  [ó] 255 255 31 says oh[ ]con[ ]accento[ ]acuto
+  [ú] 255 255 157 says u[ ]con[ ]accento[ ]acuto
+  [Á] 255 255 120 says ah[ ]maiuscola[ ]con[ ]accento[ ]acuto
+  [É] 255 255 17 says eh[ ]con[ ]accento[ ]acuto
+  [Í] 255 255 138 says ih[ ]maiuscola[ ]con[ ]accento[ ]acuto
+  [Ó] 255 255 31 says oh[ ]con[ ]accento[ ]acuto
+  [Ú] 255 255 156 says u[ ]maiuscola[ ]con[ ]accento[ ]acuto
+  [â] 255 255 123 says ah[ ]con[ ]accento[ ]circonflesso
+  [ê] 255 255 135 says eh[ ]con[ ]accento[ ]circonflesso
+  [î] 255 255 141 says ih[ ]con[ ]accento[ ]circonflesso
+  [ô] 255 255 149 says oh[ ]con[ ]accento[ ]circonflesso
+  [û] 255 255 159 says u[ ]con[ ]accento[ ]circonflesso
+  [Â] 255 255 122 says ah[ ]maiuscola[ ]con[ ]accento[ ]circonflesso
+  [Ê] 255 255 134 says eh[ ]maiuscola[ ]con[ ]accento[ ]circonflesso
+  [Î] 255 255 140 says ih[ ]maiuscola[ ]con[ ]accento[ ]circonflesso
+  [Ô] 255 255 148 says oh[ ]maiuscola[ ]con[ ]accento[ ]circonflesso
+  [Û] 255 255 158 says u[ ]maiuscola[ ]con[ ]accento[ ]circonflesso
+  [ã] 255 255 125 says ah[ ]con[ ]tilde
+  [õ] 255 255 151 says oh[ ]con[ ]tilde
+  [Ã] 255 255 124 says ah[ ]maiuscola[ ]con[ ]tilde
+  [Õ] 255 255 150 says oh[ ]maiuscola[ ]con[ ]tilde
+  [ä] 255 255 127 says ah[ ]con[ ]la[ ]umlaut
+  [ë] 255 255 137 says eh[ ]con[ ]la[ ]umlaut
+  [ï] 255 255 143 says ih[ ]con[ ]la[ ]umlaut
+  [ö] 255 255 153 says oh[ ]con[ ]la[ ]umlaut
+  [ü] 255 255 161 says u[ ]con[ ]la[ ]umlaut
+  [Ä] 255 255 126 says ah[ ]maiuscola[ ]con[ ]la[ ]umlaut
+  [Ë] 255 255 136 says eh[ ]maiuscola[ ]con[ ]la[ ]umlaut
+  [Ï] 255 255 142 says ih[ ]maiuscola[ ]con[ ]la[ ]umlaut
+  [Ö] 255 255 152 says oh[ ]maiuscola[ ]con[ ]la[ ]umlaut
+  [Ü] 255 255 160 says u[ ]maiuscola[ ]con[ ]la[ ]umlaut
+  [å] 255 255 129 says ah[ ]con[ ]circolo
+  [Å] 255 255 128 says ah[ ]maiuscola[ ]con[ ]circolo
+  [æ] 255 255 131 says dittongo[ ]minisculo
+  [Æ] 255 255 130 says dittongo[ ]maiuscolo
+  [] 255 255 119 says oh[ ]eh
+  [] 255 255 119 says oh[ ]eh
+  [ø] 255 255 155 says oh[ ]sbarrata
+  [Ø] 255 255 154 says oh[ ]maiuscola[ ]sbarrata
+  [ý] 255 255 163 says ipsilon[ ]con[ ]accento[ ]acuto
+  [Ý] 255 255 162 says ipsilon[ ]maiuscola[ ]con[ ]accento[ ]acuto
+  [ç] 255 255 133 says cih[ ]con[ ]cediglia
+  [Ç] 255 255 132 says cih[ ]maiuscola[ ]con[ ]cediglia
+  [ð] 255 255 145 says dih[ ]sbarrata
+  [Ð] 255 255 144 says dih[ ]maiuscola[ ]sbarrata
+  [ñ] 255 255 147 says enne[ ]con[ ]tilde
+  [Ñ] 255 255 146 says enne[ ]maiuscola[ ]con[ ]tilde
+  [] 255 255 118 says esse
+  [] 255 255 118 says esse
+  [ß] 255 255 164 says beta
+  [þ] 255 255 116 says simbolo
+  [Þ] 255 255 116 says simbolo
+  [] 255 255 76 says euro
+  [¢] 255 255 86 says sent
+  [£] 255 255 87 says sterlina
+  [¥] 255 255 89 says simbolo
+  [] 255 255 77 says puntini
+  [] 255 255 78 says aperte[ ]virgolette
+  [] 255 255 79 says chiuse[ ]virgolette
+  [¡] 255 255 85 says punto[ ]esclamativo[ ]rovesciato
+  [¿] 255 255 114 says punto[ ]di[ ]domanda[ ]rovesciato
+  [«] 255 255 95 says aperte[ ]virgolette
+  [»] 255 255 110 says chiuse[ ]virgolette
+  [] 255 255 81 says trattino[ ]d'unione
+  [] 255 255 82 says segno[ ]di[ ]allungamento
+  [¼] 255 255 111 says un[ ]quarto
+  [½] 255 255 112 says una[ ]met[à]
+  [¾] 255 255 113 says tre[ ]quarti
+  [÷] 255 255 117 says diviso
+  [×] 255 255 115 says per
+  [±] 255 255 101 says pi[ù][ ]o[ ]meno
+  [°] 255 255 100 says grad
+  [·] 255 255 106 says punto
+  [¹] 255 255 108 says indice[ ]huno
+  [²] 255 255 102 says indice[ ]due
+  [³] 255 255 103 says indice[ ]tre
+  [ª] 255 255 94 says indice[ ]ah
+  [º] 255 255 109 says indice[ ]oh
+  [] 255 255 83 says tilde
+  [¨] 255 255 92 says dieresi
+  [¸] 255 255 107 says cediglia
+  [] 255 255 80 says simbolo
+  [] 255 255 84
+  [ ] 255 255 84
+  [¤] 255 255 88 says simbolo
+  [¦] 255 255 90 says barra[ ]verticale
+  [§] 255 255 91 says sezione
+  [©] 255 255 93 says copyright
+  [¬] 255 255 96 says trattino
+  [­] 255 255 97 says trattino[ ]d'unione
+  [®] 255 255 98 says registered
+  [¯] 255 255 99 says segno[ ]di[ ]allungamento
+  [µ] 255 255 104 says mu
+  [¶] 255 255 105 says paragrafo
+
+  [#208] 255 255 206
+  [#210] 255 255 207
+  [#211] 255 255 208
+  [#212] 255 255 209
+  [#213] 255 255 210
+  [#214] 255 255 211
+dictionary ital_tok_dict statement 1 width 0 records characters
+
+dictionary ital_words statement 1 width 0 records sound
+
+dictionary assign_homogr_stress statement 1 width 0 records sound
+
+dictionary assign_homogr_E_e statement 1 width 0 records sound
+
+dictionary assign_homogr_c_o statement 1 width 0 records sound

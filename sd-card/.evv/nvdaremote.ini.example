@@ -1,0 +1,6 @@
+# Rename this file to nvdaremote.ini after copying it to the SD card.
+# Do not commit the renamed file.
+host=remote.example.org
+port=6837
+key=YOUR_PRIVATE_CHANNEL_KEY
+

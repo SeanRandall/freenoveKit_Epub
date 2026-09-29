@@ -1,0 +1,12 @@
+build/
+firmware/build/
+firmware/managed_components/
+sdkconfig
+sdkconfig.old
+*.pyc
+__pycache__/
+
+# Never commit live credentials copied from the example files.
+sd-card/.evv/WIFI.INI
+sd-card/.evv/nvdaremote.ini
+

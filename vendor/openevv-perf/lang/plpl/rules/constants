@@ -1,0 +1,149 @@
+# Bytes a rule of Polish's names by address, which no lifter writes: these are
+# ours. A string a rule holds against the text is one code per character in
+# the alphabet the statement type declares, not ASCII, and
+# tools/lang-alphabet.py show plpl is what says which code is which letter.
+# The phonemes are the phone statement's own alphabet, which
+# tools/lang-phonemes.py prints.
+
+# The eight letters Italian has not got, by the codes the alphabet gives them.
+bytes pol_letter_aogonek  cf      # a with an ogonek
+bytes pol_letter_cacute   d0      # c with an acute
+bytes pol_letter_eogonek  d1      # e with an ogonek
+bytes pol_letter_lstroke  d2      # l with a stroke
+bytes pol_letter_nacute   d3      # n with an acute
+bytes pol_letter_sacute   d4      # s with an acute
+bytes pol_letter_zacute   d5      # z with an acute
+bytes pol_letter_zdot     d6      # z with a dot above
+
+# What the two ogoneks say. They are nasal vowels, which this inventory has
+# not got: they are spoken as the vowel and then an n, which is what Polish
+# itself does before a stop and near enough elsewhere until there is a nasal
+# vowel to use. The other six letters say one phoneme each and the module
+# already has a wrapper that lays each of those down, so they name nothing
+# here.
+bytes pol_ph_on           21 12   # the open o, then n
+bytes pol_ph_en           1d 12   # the open e, then n
+
+# The hard affricates, cz and dż. Polish's soft ć and dź are Italian's own C
+# and J, which its phonology already breaks into a stop and the palatal
+# fricative; the hard pair has no code of its own left, so a letter rule lays
+# down the stop and the retroflex fricative itself, which is the same two
+# sounds in the same order.
+bytes pol_ph_tsz          04 18   # t, then the hard sz
+bytes pol_ph_dzz          03 16   # d, then the hard ż
+
+# The names of the six letters Polish has that Italian has not, as characters
+# rather than sounds: a lone letter is spoken by spelling its name out and
+# reading that back as a word, which is what ital_char_name does for every
+# letter Italian has. The codes are the input alphabet's, so ż inside żet is
+# the same 0xd6 the text arrives as, and every one of these names is spelled
+# with letters that already speak.
+bytes pol_name_cacute     0c 03 02      # cie
+bytes pol_name_lstroke    02 d2         # eł
+bytes pol_name_nacute     02 d3         # eń
+bytes pol_name_sacute     02 d4         # eś
+bytes pol_name_zacute     1f 03 02 1a   # ziet
+bytes pol_name_zdot       d6 02 1a      # żet
+
+# And the Polish name of every letter of the Latin alphabet, for the same
+# reason: a lone letter is spoken by its name, and every one of these was
+# Italian's. a was ah, which sounds right only because h is silent, and w
+# was doppia vi.
+bytes pol_name_a         01             # a
+bytes pol_name_b         0b 02          # be
+bytes pol_name_c         0c 02          # ce
+bytes pol_name_d         0d 02          # de
+bytes pol_name_e         02             # e
+bytes pol_name_f         02 0e          # ef
+bytes pol_name_g         0f 03 02       # gie
+bytes pol_name_h         10 01          # ha
+bytes pol_name_i         03             # i
+bytes pol_name_j         11 04 1a       # jot
+bytes pol_name_k         12 01          # ka
+bytes pol_name_l         02 13          # el
+bytes pol_name_m         02 14          # em
+bytes pol_name_n         02 15          # en
+bytes pol_name_o         04             # o
+bytes pol_name_p         16 02          # pe
+bytes pol_name_q         12 05          # ku
+bytes pol_name_r         02 18          # er
+bytes pol_name_s         02 19          # es
+bytes pol_name_t         1a 02          # te
+bytes pol_name_u         05             # u
+bytes pol_name_v         0e 01 1c       # faw
+bytes pol_name_w         1c 05          # wu
+bytes pol_name_x         03 12 19       # iks
+bytes pol_name_y         03 0f 18 02 12 # igrek
+bytes pol_name_z         1f 02 1a       # zet
+
+# The Polish number words. Italian's are in the wrappers its own arms
+# call, one wrapper to a word with the word and its length baked into the
+# name, so a word of Polish's is a wrapper of ours and one call name
+# changed in the arm. zero is not here: Polish says zero too, with the
+# same four characters.
+bytes pol_num_2      0d 1c 01                   # dwa, 3 characters
+bytes pol_num_3      1a 18 1f 1e                # trzy, 4 characters
+bytes pol_num_4      0c 1f 1a 02 18 1e          # cztery, 6 characters
+bytes pol_num_5      16 03 d1 d0                # pięć, 4 characters
+bytes pol_num_6      19 1f 02 d4 d0             # sześć, 5 characters
+bytes pol_num_7      19 03 02 0d 02 14          # siedem, 6 characters
+bytes pol_num_8      04 19 03 02 14             # osiem, 5 characters
+bytes pol_num_9      0d 1f 03 02 1c 03 d1 d0    # dziewięć, 8 characters
+
+# The teens.
+bytes pol_num_10     0d 1f 03 02 19 03 d1 d0                      # dziesięć, 8 characters
+bytes pol_num_11     11 02 0d 02 15 01 d4 0c 03 02                # jedenaście, 10 characters
+bytes pol_num_12     0d 1c 01 15 01 d4 0c 03 02                   # dwanaście, 9 characters
+bytes pol_num_13     1a 18 1f 1e 15 01 d4 0c 03 02                # trzynaście, 10 characters
+bytes pol_num_14     0c 1f 1a 02 18 15 01 d4 0c 03 02             # czternaście, 11 characters
+bytes pol_num_15     16 03 d1 1a 15 01 d4 0c 03 02                # piętnaście, 10 characters
+bytes pol_num_16     19 1f 02 19 15 01 d4 0c 03 02                # szesnaście, 10 characters
+bytes pol_num_17     19 03 02 0d 02 14 15 01 d4 0c 03 02          # siedemnaście, 12 characters
+bytes pol_num_18     04 19 03 02 14 15 01 d4 0c 03 02             # osiemnaście, 11 characters
+bytes pol_num_19     0d 1f 03 02 1c 03 d1 1a 15 01 d4 0c 03 02    # dziewiętnaście, 14 characters
+
+# The tens, each with a trailing space.
+bytes pol_num_20     0d 1c 01 0d 1f 03 02 d4 0c 03 01 48                # dwadzieścia and a space, 12 characters
+bytes pol_num_30     1a 18 1f 1e 0d 1f 03 02 d4 0c 03 48                # trzydzieści and a space, 12 characters
+bytes pol_num_40     0c 1f 1a 02 18 0d 1f 03 02 d4 0c 03 48             # czterdzieści and a space, 13 characters
+bytes pol_num_50     16 03 d1 d0 0d 1f 03 02 19 03 cf 1a 48             # pięćdziesiąt and a space, 13 characters
+bytes pol_num_60     19 1f 02 d4 d0 0d 1f 03 02 19 03 cf 1a 48          # sześćdziesiąt and a space, 14 characters
+bytes pol_num_70     19 03 02 0d 02 14 0d 1f 03 02 19 03 cf 1a 48       # siedemdziesiąt and a space, 15 characters
+bytes pol_num_80     04 19 03 02 14 0d 1f 03 02 19 03 cf 1a 48          # osiemdziesiąt and a space, 14 characters
+bytes pol_num_90     0d 1f 03 02 1c 03 d1 d0 0d 1f 03 02 19 03 cf 1a 48 # dziewięćdziesiąt and a space, 17 characters
+
+# One, which Italian says four ways and Polish one.
+bytes pol_num_1      11 02 0d 02 15                                     # jeden, 5 characters
+
+# A hundred and a thousand. The joined forms keep the mark Italian puts
+# in front of them, since that is the machine's and not the language's.
+bytes pol_num_100      19 1a 04                       # sto, 3 characters
+bytes pol_num_100j     c7 19 02 1a                    # the joined hundreds, after two to nine, 4 characters
+bytes pol_num_1000     1a 1e 19 03 cf 0c              # tysiąc, 6 characters
+bytes pol_num_1000j    c7 48 1a 1e 19 03 cf 0c 02     # a space and tysiące, for two thousand and up, 9 characters
+
+# The millions and the billions, and the and between them that Polish
+# does not say.
+bytes pol_num_mln      c7 48 14 03 13 03 04 15            # a million, 8 characters
+bytes pol_num_mlns     c7 48 14 03 13 03 04 15 1e         # millions, which is right for two to four, 9 characters
+bytes pol_num_mld      c7 48 14 03 13 03 01 18 0d         # a billion, 9 characters
+bytes pol_num_mlds     c7 48 14 03 13 03 01 18 0d 1e      # billions, two to four again, 10 characters
+bytes pol_num_and      c7 48                              # where Italian says e, 2 characters
+
+# The phone ą lays down, which is a code of its own rather than a retaken one:
+# there was nothing left to retake.
+bytes pol_ph_aogonek     23             # the nasal open o, code 35
+
+# The letters that make a voiced consonant in front of them voiceless: p, t, k,
+# f, s, c, h and the two soft ones. sz and cz need no entry of their own, since
+# they start with s and c.
+bytes pol_letter_p        16
+bytes pol_letter_t        1a
+bytes pol_letter_k        12
+bytes pol_letter_f        0e
+bytes pol_letter_s        19
+bytes pol_letter_c        0c
+bytes pol_letter_h        10
+
+# The phone ch and h lay down: /x/, code 36.
+bytes pol_ph_x            24

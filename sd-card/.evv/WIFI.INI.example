@@ -1,0 +1,5 @@
+# Rename this file to WIFI.INI after copying it to the SD card.
+# Do not commit the renamed file.
+ssid=YOUR_WIFI_NETWORK
+password=YOUR_WIFI_PASSWORD
+
