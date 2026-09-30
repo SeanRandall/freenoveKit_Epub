@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <dirent.h>
 #include <errno.h>
 #include <sys/stat.h>
@@ -60,7 +61,8 @@ void evv_port_start(void);
 #define SAMPLE_RATE 11025
 #define FRAME_SAMPLES 2048
 #define PAUSE_REWIND_MS 500
-#define ROLLING_START_MS 6000
+#define ROLLING_START_MS 4000
+#define OPENING_BOOK_SOUND_MS 500
 #define READER_PCM_BYTES ((7u * 1024u * 1024u) / 2u)
 #define READER_RETAIN_SAMPLES (SAMPLE_RATE * 8)
 #define READER_RING_LOW_SAMPLES (SAMPLE_RATE * 30)
@@ -104,6 +106,8 @@ static volatile bool reader_render_abort;
 static volatile bool reader_render_stop_requested;
 static volatile bool reader_production_complete;
 static volatile bool reader_play_task_running;
+static volatile bool reader_opening_tone_running;
+static volatile size_t reader_keypress_sample = SIZE_MAX;
 static volatile int32_t reader_seek_samples;
 static volatile int reader_sentence_seek;
 static volatile bool reader_controls_ready;
@@ -150,6 +154,10 @@ static volatile bool reader_continue_pending;
 static volatile bool reader_menu;
 static bool reader_status_menu;
 static size_t reader_menu_index;
+static volatile bool reader_menu_announcement_pending;
+static TickType_t reader_menu_changed_at;
+static volatile bool reader_preferences_dirty;
+static TickType_t reader_preferences_changed_at;
 static bool reader_dictionary_commands = true;
 static bool reader_substitutions_enabled = true;
 static bool reader_interface_sounds = true;
@@ -288,6 +296,8 @@ extern const uint8_t volume_maximum_wav_end[]
     asm("_binary_volume_maximum_wav_end");
 extern const uint8_t ui_wav_start[] asm("_binary_UI_wav_start");
 extern const uint8_t ui_wav_end[] asm("_binary_UI_wav_end");
+extern const uint8_t keypress_wav_start[] asm("_binary_keypress_wav_start");
+extern const uint8_t keypress_wav_end[] asm("_binary_keypress_wav_end");
 extern const uint8_t opening_book_wav_start[]
     asm("_binary_opening_book_wav_start");
 extern const uint8_t opening_book_wav_end[]
@@ -300,6 +310,10 @@ extern const uint8_t recording_stopped_wav_start[]
     asm("_binary_recording_stopped_wav_start");
 extern const uint8_t recording_stopped_wav_end[]
     asm("_binary_recording_stopped_wav_end");
+
+#ifdef PARAGRAPH_READER_MODE
+static void reader_mix_keypress(int16_t *output, size_t frames);
+#endif
 
 static enum ECICallbackReturn STDCALL on_message(OldInst *instance,
                                                   enum ECIMessage message,
@@ -371,6 +385,9 @@ static enum ECICallbackReturn STDCALL on_message(OldInst *instance,
         stereo_frame[i * 2 + 1] = mono_frame[i];
 #endif
     }
+#ifdef PARAGRAPH_READER_MODE
+    reader_mix_keypress(stereo_frame, count);
+#endif
 
     size_t bytes_written = 0;
     esp_err_t err = i2s_channel_write(tx_channel, stereo_frame,
@@ -505,6 +522,47 @@ static int16_t reader_scale_sample(int16_t input, int volume)
     int32_t b = (int32_t)(reader_dither_state % 100);
     int32_t scaled = (int32_t)input * volume + a - b;
     return (int16_t)(scaled / 100);
+}
+
+/* Mix the short keypad cue into whichever PCM stream already owns I2S.  This
+   avoids interrupting speech or racing a second writer against the shared
+   transmitter.  The converted asset is mono, 16-bit and already at 11025 Hz. */
+static void reader_mix_keypress(int16_t *output, size_t frames)
+{
+    if (!reader_interface_sounds)
+        return;
+    size_t position = __atomic_load_n(&reader_keypress_sample,
+                                      __ATOMIC_ACQUIRE);
+    if (position == SIZE_MAX || keypress_wav_end - keypress_wav_start < 44)
+        return;
+    size_t samples = ((size_t)keypress_wav_start[40]
+                      | ((size_t)keypress_wav_start[41] << 8)
+                      | ((size_t)keypress_wav_start[42] << 16)
+                      | ((size_t)keypress_wav_start[43] << 24))
+                     / sizeof(int16_t);
+    const int16_t *cue = (const int16_t *)(keypress_wav_start + 44);
+    size_t made = 0;
+    while (made < frames && position + made < samples) {
+        int32_t key = reader_scale_sample(cue[position + made], reader_volume);
+        for (unsigned channel = 0; channel < 2; ++channel) {
+            int32_t mixed = output[made * 2 + channel] + key;
+            if (mixed > INT16_MAX) mixed = INT16_MAX;
+            if (mixed < INT16_MIN) mixed = INT16_MIN;
+            output[made * 2 + channel] = (int16_t)mixed;
+        }
+        ++made;
+    }
+    size_t expected = position;
+    size_t next = position + made >= samples ? SIZE_MAX : position + made;
+    (void)__atomic_compare_exchange_n(&reader_keypress_sample, &expected, next,
+                                      false, __ATOMIC_RELEASE,
+                                      __ATOMIC_RELAXED);
+}
+
+static void reader_keypress(void)
+{
+    if (reader_interface_sounds)
+        __atomic_store_n(&reader_keypress_sample, 0, __ATOMIC_RELEASE);
 }
 
 static void reader_stop_audio(void)
@@ -770,7 +828,12 @@ static bool reader_start_next_text_chunk(OldInst *instance)
        while OpenEVV still pays its per-request setup cost.  Give it more text
        per request so synthesis can stay ahead without increasing the cold
        six-second playback delay.  The buffers below have room for 767 bytes. */
-    size_t chunk_target = reader_rate <= 115 ? 180
+    /* Minimise time-to-first-audio.  The first request only needs enough PCM
+       to bridge into the normal rolling producer; subsequent requests retain
+       the larger high-rate batches that keep playback comfortably ahead. */
+    bool cold_chunk = reader_pcm_samples == 0;
+    size_t chunk_target = cold_chunk ? 320
+        : reader_rate <= 115 ? 180
         : reader_rate <= 120 ? 320
         : reader_rate <= 130 ? 480 : 640;
     size_t take = until_section < chunk_target ? until_section : chunk_target;
@@ -794,7 +857,9 @@ static bool reader_start_next_text_chunk(OldInst *instance)
                 last_sentence_boundary = after;
             }
         }
-        if (last_sentence_boundary != 0) {
+        if (last_sentence_boundary != 0
+            && (!cold_chunk
+                || last_sentence_boundary >= chunk_target * 3 / 4)) {
             take = last_sentence_boundary;
             sentence_ended = true;
         } else {
@@ -1173,6 +1238,7 @@ static bool reader_play_pcm(uint32_t generation)
             reader_playback_frame[i * 2] = sample;
             reader_playback_frame[i * 2 + 1] = sample;
         }
+        reader_mix_keypress(reader_playback_frame, made);
         xSemaphoreGive(reader_pcm_mutex);
         size_t written = 0;
         int64_t before_write_us = esp_timer_get_time();
@@ -1272,8 +1338,10 @@ static uint16_t read_le16(const uint8_t *p)
     return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
 }
 
-static bool play_wav_tone(const uint8_t *wav_start, const uint8_t *wav_end,
-                          uint32_t generation)
+static bool play_wav_tone_limited(const uint8_t *wav_start,
+                                  const uint8_t *wav_end,
+                                  uint32_t generation,
+                                  uint32_t maximum_ms)
 {
     static const int16_t silence[FRAME_SAMPLES * 2];
     const size_t wav_size = (size_t)(wav_end - wav_start);
@@ -1297,6 +1365,11 @@ static bool play_wav_tone(const uint8_t *wav_start, const uint8_t *wav_end,
         return false;
     const int16_t *pcm = (const int16_t *)(wav_start + 44);
     size_t input_frames = data_bytes / (channels * sizeof(int16_t));
+    if (maximum_ms) {
+        size_t maximum_frames = (size_t)source_rate * maximum_ms / 1000;
+        if (input_frames > maximum_frames)
+            input_frames = maximum_frames;
+    }
 
     if (i2s_channel_enable(tx_channel) != ESP_OK)
         return false;
@@ -1329,6 +1402,7 @@ static bool play_wav_tone(const uint8_t *wav_start, const uint8_t *wav_end,
             phase += phase_step;
             ++made;
         }
+        reader_mix_keypress(stereo_frame, made);
         size_t bytes_written = 0;
         if (i2s_channel_write(tx_channel, stereo_frame,
                               made * 2 * sizeof(int16_t), &bytes_written,
@@ -1344,6 +1418,37 @@ static bool play_wav_tone(const uint8_t *wav_start, const uint8_t *wav_end,
         vTaskDelay(pdMS_TO_TICKS(20));
     (void)i2s_channel_disable(tx_channel);
     return true;
+}
+
+static bool play_wav_tone(const uint8_t *wav_start, const uint8_t *wav_end,
+                          uint32_t generation)
+{
+    return play_wav_tone_limited(wav_start, wav_end, generation, 0);
+}
+
+static void reader_opening_tone_task(void *arg)
+{
+    uint32_t generation = (uint32_t)(uintptr_t)arg;
+    (void)play_wav_tone_limited(opening_book_wav_start,
+                                opening_book_wav_end, generation,
+                                OPENING_BOOK_SOUND_MS);
+    reader_opening_tone_running = false;
+    vTaskDeleteWithCaps(NULL);
+}
+
+static bool reader_start_opening_tone(uint32_t generation)
+{
+    if (reader_opening_tone_running)
+        return true;
+    reader_opening_tone_running = true;
+    BaseType_t created = xTaskCreatePinnedToCoreWithCaps(
+        reader_opening_tone_task, "opening_tone", 4096,
+        (void *)(uintptr_t)generation, 5, NULL, 0,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (created == pdPASS)
+        return true;
+    reader_opening_tone_running = false;
+    return false;
 }
 
 static int classify_button_mv(int millivolts)
@@ -1414,6 +1519,12 @@ static void reader_save_preferences(void)
     (void)nvs_set_blob(reader_prefs, "statusorder", reader_status_order,
                        sizeof(reader_status_order));
     (void)nvs_commit(reader_prefs);
+}
+
+static void reader_schedule_preferences_save(void)
+{
+    reader_preferences_dirty = true;
+    reader_preferences_changed_at = xTaskGetTickCount();
 }
 
 static void reader_load_preferences(void)
@@ -1692,7 +1803,7 @@ static void reader_speak_library_item(void)
     queue_audio(AUDIO_SPEECH, reader_announcement);
 }
 
-static void reader_speak_menu_item(void)
+static void reader_format_menu_item(void)
 {
     static const unsigned sleep_minutes[] = {0, 5, 10, 15, 30, 45, 60, 90};
     if (reader_menu_index == 0)
@@ -1754,7 +1865,12 @@ static void reader_speak_menu_item(void)
     else
         strlcpy(reader_announcement, "close menu",
                 sizeof(reader_announcement));
-    queue_audio(AUDIO_SPEECH, reader_announcement);
+}
+
+static void reader_speak_menu_item(void)
+{
+    reader_menu_announcement_pending = true;
+    reader_menu_changed_at = xTaskGetTickCount();
 }
 
 static void reader_toggle_dictionary_commands(void)
@@ -1815,14 +1931,19 @@ static const char *reader_status_name(unsigned field)
     return field < READER_STATUS_COUNT ? names[field] : "status";
 }
 
-static void reader_speak_status_menu_item(void)
+static void reader_format_status_menu_item(void)
 {
     unsigned field = reader_status_order[reader_status_menu_index];
     snprintf(reader_announcement, sizeof(reader_announcement),
              "%s. %s. %u of %u", reader_status_name(field),
              reader_status_enabled & (1U << field) ? "on" : "off",
              (unsigned)reader_status_menu_index + 1, READER_STATUS_COUNT);
-    queue_audio(AUDIO_SPEECH, reader_announcement);
+}
+
+static void reader_speak_status_menu_item(void)
+{
+    reader_menu_announcement_pending = true;
+    reader_menu_changed_at = xTaskGetTickCount();
 }
 
 static void reader_open_status_menu(void)
@@ -2101,6 +2222,7 @@ static void reader_open_menu(void)
 {
     reader_menu = true;
     reader_menu_index = 0;
+    reader_menu_announcement_pending = false;
     reader_ui_tone_pending = reader_interface_sounds;
     snprintf(reader_announcement, sizeof(reader_announcement),
              "menu. speaking rate. %d", reader_rate);
@@ -2109,6 +2231,7 @@ static void reader_open_menu(void)
 
 static void reader_close_menu(void)
 {
+    reader_menu_announcement_pending = false;
     reader_status_menu = false;
     reader_menu = false;
     reader_ui_tone_pending = reader_interface_sounds;
@@ -2125,10 +2248,8 @@ static void reader_change_rate(int direction)
     reader_rate = changed;
     reader_loaded = false;
     reader_pcm_valid = false;
-    reader_save_preferences();
-    snprintf(reader_announcement, sizeof(reader_announcement),
-             "rate %d", reader_rate);
-    queue_audio(AUDIO_SPEECH, reader_announcement);
+    reader_schedule_preferences_save();
+    reader_speak_menu_item();
 }
 
 static void reader_change_volume(int direction)
@@ -2141,10 +2262,8 @@ static void reader_change_volume(int direction)
         if (reader_volume > 10) reader_volume -= 5;
         else if (reader_volume > 2) reader_volume -= 2;
     }
-    reader_save_preferences();
-    snprintf(reader_announcement, sizeof(reader_announcement),
-             "volume %d percent", reader_volume);
-    queue_audio(AUDIO_SPEECH, reader_announcement);
+    reader_schedule_preferences_save();
+    reader_speak_menu_item();
 }
 
 static void reader_put_le16(uint8_t *p, uint16_t value)
@@ -2181,6 +2300,7 @@ static void reader_make_wav_header(uint8_t header[44], uint32_t data_bytes)
 static void reader_recording_task(void *argument)
 {
     char *final_path = argument;
+    puts("RECORDING task entered");
     char temporary_path[512];
     snprintf(temporary_path, sizeof(temporary_path), "%s.tmp", final_path);
     FILE *output = fopen(temporary_path, "wb+");
@@ -2227,6 +2347,8 @@ static void reader_recording_task(void *argument)
         printf("RECORDING i2s_enable failed=%s\n", esp_err_to_name(i2s_result));
         success = false;
     }
+    if (success)
+        puts("RECORDING microphone active");
 
     int32_t input[512];
     int16_t mono[256];
@@ -2257,6 +2379,7 @@ static void reader_recording_task(void *argument)
             success = false;
     }
     if (rx) {
+        puts("RECORDING stopping microphone");
         (void)i2s_channel_disable(rx);
         (void)i2s_del_channel(rx);
     }
@@ -2272,7 +2395,8 @@ static void reader_recording_task(void *argument)
     if (success && data_bytes && rename(temporary_path, final_path) == 0) {
         printf("RECORDING saved=%s bytes=%u\n", final_path,
                (unsigned)data_bytes);
-        queue_audio(AUDIO_RECORDING_STOPPED, NULL);
+        if (reader_interface_sounds)
+            queue_audio(AUDIO_RECORDING_STOPPED, NULL);
     } else {
         printf("RECORDING failed path=%s bytes=%u errno=%d\n", final_path,
                (unsigned)data_bytes, errno);
@@ -2284,7 +2408,11 @@ static void reader_recording_task(void *argument)
     free(final_path);
     reader_recording = false;
     reader_recording_task_handle = NULL;
-    vTaskDelete(NULL);
+    /* This task's stack is allocated by xTaskCreateWithCaps() in PSRAM.
+       It must be released by the matching capability-aware deletion API;
+       the ordinary FreeRTOS deleter corrupts/aborts during recording stop. */
+    puts("RECORDING task complete");
+    vTaskDeleteWithCaps(NULL);
 }
 
 static bool reader_begin_recording(void)
@@ -2338,8 +2466,13 @@ static bool reader_begin_recording(void)
     printf("RECORDING create free_internal=%u free_psram=%u\n",
            (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
            (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+    /* FAT writes, I2S and newlib's stdio path have a considerably deeper
+       combined call stack than the capture buffers alone suggest.  The old
+       6 KB stack overflowed as soon as the first microphone DMA block was
+       handled.  Keep the larger stack in PSRAM so scarce internal RAM is not
+       consumed. */
     BaseType_t created = xTaskCreateWithCaps(
-        reader_recording_task, "recording", 6144, path, 4,
+        reader_recording_task, "recording", 16384, path, 4,
         &reader_recording_task_handle, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (created != pdPASS) {
         printf("RECORDING task create failed free_internal=%u free_psram=%u\n",
@@ -2500,6 +2633,8 @@ static void reader_button_scan_task(void *argument)
                 suppressed_press = false;
                 continue;
             }
+            if (stable_key != 0 && !locked)
+                reader_keypress();
             if (stable_key == 1) {
                 centre_started = xTaskGetTickCount();
                 centre_hold_handled = false;
@@ -2729,7 +2864,10 @@ static void reader_button_scan_task(void *argument)
                    start recording without first moving section. */
             }
         }
-        if (stable_key == 1 && !centre_hold_handled
+        /* A key used to stop recording is consumed through its release.
+           Otherwise these continuously evaluated hold paths can act on it
+           even though the edge handler above marked the press suppressed. */
+        if (!suppressed_press && stable_key == 1 && !centre_hold_handled
             && xTaskGetTickCount() - centre_started >= pdMS_TO_TICKS(1200)) {
             locked = !locked;
             centre_hold_handled = true;
@@ -2745,15 +2883,22 @@ static void reader_button_scan_task(void *argument)
             printf("CONTROLS locked=%d\n", locked);
             queue_audio(locked ? AUDIO_LOCKED : AUDIO_UNLOCKED, NULL);
         }
-        if (stable_key == 5 && !right_hold_handled && !locked
+        if (!suppressed_press && stable_key == 5 && !right_hold_handled && !locked
             && !reader_menu && !reader_library && reader_paused
             && !reader_recording
             && xTaskGetTickCount() - right_started >= pdMS_TO_TICKS(1200)) {
             right_hold_handled = true;
-            queue_audio(AUDIO_RECORDING_STARTED, NULL);
+            if (reader_interface_sounds)
+                queue_audio(AUDIO_RECORDING_STARTED, NULL);
+            else if (!reader_begin_recording()) {
+                strlcpy(reader_announcement,
+                        "recording could not be started",
+                        sizeof(reader_announcement));
+                queue_audio(AUDIO_SPEECH, reader_announcement);
+            }
             puts("RECORDING start requested by hold right");
         }
-        if (stable_key == 2 && !up_hold_handled
+        if (!suppressed_press && stable_key == 2 && !up_hold_handled
             && xTaskGetTickCount() - up_started >= pdMS_TO_TICKS(1200)) {
             up_hold_handled = true;
             if (reader_menu && !up_opened_menu) {
@@ -2771,14 +2916,14 @@ static void reader_button_scan_task(void *argument)
                 puts("MENU opened by hold up");
             }
         }
-        if (stable_key == 3 && !left_hold_handled && !locked
+        if (!suppressed_press && stable_key == 3 && !left_hold_handled && !locked
             && reader_menu && reader_status_menu
             && xTaskGetTickCount() - left_started >= pdMS_TO_TICKS(1200)) {
             left_hold_handled = true;
             reader_close_status_menu();
             puts("STATUS_MENU closed by hold left");
         }
-        if (stable_key == 3 && !left_hold_handled && !locked
+        if (!suppressed_press && stable_key == 3 && !left_hold_handled && !locked
             && !reader_menu && (reader_library || reader_paused)
             && xTaskGetTickCount() - left_started >= pdMS_TO_TICKS(1200)) {
             left_hold_handled = true;
@@ -2812,6 +2957,30 @@ static void reader_button_scan_task(void *argument)
                    >= pdMS_TO_TICKS(180)) {
             library_announcement_pending = false;
             reader_speak_library_item();
+        }
+        /* Menu movement and repeated value changes are deliberately silent
+           while the stick is busy.  Compose the text only after landing so
+           an in-flight utterance never observes a mutated shared buffer. */
+        if (reader_menu_announcement_pending && stable_key == 0
+            && !reader_ui_busy
+            && xTaskGetTickCount() - reader_menu_changed_at
+                   >= pdMS_TO_TICKS(250)) {
+            reader_menu_announcement_pending = false;
+            if (reader_menu) {
+                if (reader_status_menu)
+                    reader_format_status_menu_item();
+                else
+                    reader_format_menu_item();
+                queue_audio(AUDIO_SPEECH, reader_announcement);
+            }
+        }
+        if (reader_preferences_dirty && !reader_menu_announcement_pending
+            && !reader_ui_busy
+            && xTaskGetTickCount() - reader_preferences_changed_at
+                   >= pdMS_TO_TICKS(1000)) {
+            reader_preferences_dirty = false;
+            reader_save_preferences();
+            puts("PREFERENCES saved after input burst");
         }
         if (reader_sleep_timer_active
             && (int32_t)(xTaskGetTickCount()
@@ -2929,6 +3098,75 @@ static OldInst *reader_create_engine(void)
 
 #define BOOT_REQUEST_TRANSFER UINT32_C(0x45565654)
 
+typedef enum {
+    NETWORK_CONFIG_OK,
+    NETWORK_CONFIG_MISSING,
+    NETWORK_CONFIG_INVALID,
+} network_config_result_t;
+
+static network_config_result_t reader_check_key_file(
+    const char *const *paths, size_t path_count, const char *first_key,
+    const char *second_key)
+{
+    bool found = false;
+    bool have_first = false;
+    bool have_second = second_key == NULL;
+    for (size_t path_index = 0; path_index < path_count; ++path_index) {
+        FILE *file = fopen(paths[path_index], "rb");
+        if (!file)
+            continue;
+        found = true;
+        char line[384];
+        while (fgets(line, sizeof(line), file)) {
+            char *start = line;
+            while (isspace((unsigned char)*start))
+                ++start;
+            char *end = start + strlen(start);
+            while (end > start && isspace((unsigned char)end[-1]))
+                *--end = 0;
+            size_t first_length = strlen(first_key);
+            size_t second_length = second_key ? strlen(second_key) : 0;
+            if (!strncasecmp(start, first_key, first_length)
+                && start[first_length] != 0)
+                have_first = true;
+            else if (second_key
+                     && !strncasecmp(start, second_key, second_length)
+                     && start[second_length] != 0)
+                have_second = true;
+        }
+        fclose(file);
+        if (have_first && have_second)
+            return NETWORK_CONFIG_OK;
+        have_first = false;
+        have_second = second_key == NULL;
+    }
+    return found ? NETWORK_CONFIG_INVALID : NETWORK_CONFIG_MISSING;
+}
+
+static network_config_result_t reader_check_wifi_config(void)
+{
+    static const char *const paths[] = {
+        "/sdcard/.evv/WIFI.INI", "/sdcard/.evv/wifi.ini",
+        "/sdcard/EVVZERO/WIFI.INI", "/sdcard/EVVZERO/wifi.ini",
+    };
+    return reader_check_key_file(paths, sizeof(paths) / sizeof(paths[0]),
+                                 "ssid=", "password=");
+}
+
+static network_config_result_t reader_check_remote_config(void)
+{
+    static const char *const paths[] = {
+        "/sdcard/.evv/nvdaremote.ini",
+        "/sdcard/.evv/NVDAREMOTE.INI",
+    };
+    network_config_result_t result = reader_check_key_file(
+        paths, sizeof(paths) / sizeof(paths[0]), "host=", "key=");
+    if (result != NETWORK_CONFIG_OK)
+        return result;
+    return reader_check_key_file(paths, sizeof(paths) / sizeof(paths[0]),
+                                 "port=", NULL);
+}
+
 static void reader_engine_task(void *arg)
 {
     (void)arg;
@@ -2975,10 +3213,31 @@ static void reader_engine_task(void *arg)
         }
         if (event.kind == AUDIO_SWITCH_TRANSFER
             || event.kind == AUDIO_SWITCH_REMOTE) {
+            bool remote = event.kind == AUDIO_SWITCH_REMOTE;
+            network_config_result_t config = reader_check_wifi_config();
+            const char *error = NULL;
+            if (config == NETWORK_CONFIG_MISSING)
+                error = "Wi-Fi settings file not found";
+            else if (config == NETWORK_CONFIG_INVALID)
+                error = "Wi-Fi settings file is invalid";
+            else if (remote) {
+                config = reader_check_remote_config();
+                if (config == NETWORK_CONFIG_MISSING)
+                    error = "NVDA remote settings file not found";
+                else if (config == NETWORK_CONFIG_INVALID)
+                    error = "NVDA remote settings file is invalid";
+            }
+            if (error) {
+                printf("NETWORK_MODE_REJECTED mode=%s reason=%s\n",
+                       remote ? "nvda_remote" : "webdav", error);
+                (void)speak(instance, error, event.generation);
+                reader_stop_audio();
+                reader_ui_busy = false;
+                continue;
+            }
             if (reader_rendering)
                 reader_finish_book_render(instance);
             (void)reader_discard_dma_audio();
-            bool remote = event.kind == AUDIO_SWITCH_REMOTE;
             strlcpy(reader_announcement,
                     remote ? "NVDA remote" : "file transfer",
                     sizeof(reader_announcement));
@@ -2996,9 +3255,16 @@ static void reader_engine_task(void *arg)
             esp_restart();
         }
         if (event.kind == AUDIO_LOAD) {
+            int64_t load_started_us = esp_timer_get_time();
+            int64_t opening_started_us = 0;
+            bool opening_started = false;
             if (!reader_discard_dma_audio()) {
                 ESP_LOGE(TAG, "could not reset audio output");
                 continue;
+            }
+            if (reader_open_pending) {
+                opening_started_us = esp_timer_get_time();
+                opening_started = reader_start_opening_tone(event.generation);
             }
             if (reader_rendering) {
                 reader_finish_book_render(instance);
@@ -3054,9 +3320,11 @@ static void reader_engine_task(void *arg)
                 (void)speak(instance, reader_announcement, event.generation);
                 reader_stop_audio();
             }
-            (void)play_wav_tone(opening_book_wav_start,
-                                opening_book_wav_end,
-                                event.generation);
+            if (!opening_started) {
+                opening_started_us = esp_timer_get_time();
+                opening_started = reader_start_opening_tone(event.generation);
+            }
+            int64_t synthesis_started_us = esp_timer_get_time();
             ESP_ERROR_CHECK(vc_setVoiceParam(instance, 0, VOICE_SPEED,
                                              reader_rate)
                                 ? ESP_OK : ESP_FAIL);
@@ -3065,6 +3333,15 @@ static void reader_engine_task(void *arg)
                 reader_loaded = false;
                 continue;
             }
+            while (reader_opening_tone_running)
+                vTaskDelay(pdMS_TO_TICKS(5));
+            int64_t ready_us = esp_timer_get_time();
+            printf("BOOK_OPEN_TIMING prework_ms=%u tone_overlap_ms=%u synth_ms=%u total_ms=%u initial_target_ms=%u\n",
+                   (unsigned)((opening_started_us - load_started_us) / 1000),
+                   (unsigned)((ready_us - opening_started_us) / 1000),
+                   (unsigned)((ready_us - synthesis_started_us) / 1000),
+                   (unsigned)((ready_us - load_started_us) / 1000),
+                   ROLLING_START_MS);
             puts("BOOK ready");
             if (reader_resume_after_load) {
                 reader_resume_after_load = false;

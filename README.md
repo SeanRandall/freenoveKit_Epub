@@ -60,6 +60,17 @@ small `paragraph_reader_stable_main.c` wrapper. Network transfer and NVDA
 Remote support are in `transfer_mode.c` and `webdav_transfer_main.c`. EPUB
 extraction is in `epub_text.c`.
 
+The release image also contains the network application in the OTA partition
+at `0x610000`. Build that application separately with empty fallback
+credentials; Wi-Fi and NVDA Remote settings are then read from the SD card:
+
+```powershell
+idf.py -B build-transfer -D EVV_APP_SOURCE=webdav_transfer_main.c `
+  -D TRANSFER_WIFI_SSID= -D TRANSFER_WIFI_PASSWORD= build
+```
+
+Do not embed real credentials in a binary intended for distribution.
+
 The OpenEVV tree under `vendor/openevv-perf` includes the ESP32-specific local
 changes required by this build. It is deliberately vendored so testers can
 modify the speech engine without relying on an unpublished binary.

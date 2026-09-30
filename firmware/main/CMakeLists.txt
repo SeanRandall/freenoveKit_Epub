@@ -40,6 +40,7 @@ idf_component_register(
     REQUIRES ${APP_REQUIREMENTS}
     EMBED_FILES
         "../tones/UI.wav"
+        "../tones/keypress.wav"
         "../tones/opening book.wav"
         "../tones/locked.wav"
         "../tones/unlocked.wav"

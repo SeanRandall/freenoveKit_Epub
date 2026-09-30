@@ -1,5 +1,6 @@
 build/
 firmware/build/
+firmware/build-transfer/
 firmware/managed_components/
 sdkconfig
 sdkconfig.old

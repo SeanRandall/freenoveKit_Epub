@@ -156,7 +156,16 @@ static void remote_playback_task(void *arg)
 {
     (void)arg;
     int16_t local[REMOTE_PLAY_SAMPLES];
-    i2s_channel_enable(audio);
+    static const int16_t silence[FRAME_SAMPLES * 2];
+    size_t preloaded = 0;
+    bool silence_queued = true;
+    /* The TX descriptors are circular.  Populate them with silence before
+       enabling the channel so an empty remote queue can never expose stale
+       RAM or repeat audio from the preceding announcement. */
+    (void)i2s_channel_preload_data(audio, silence, sizeof(silence),
+                                   &preloaded);
+    ESP_ERROR_CHECK(i2s_channel_enable(audio));
+    printf("REMOTE_PCM i2s_silence_preloaded=%u\n", (unsigned)preloaded);
     for (;;) {
         size_t take = 0;
         bool session, started, done;
@@ -189,10 +198,23 @@ static void remote_playback_task(void *arg)
         if (take) {
             for (size_t i = 0; i < take; ++i)
                 stereo[i * 2] = stereo[i * 2 + 1] = local[i];
-            size_t written;
+            size_t written = 0;
             if (i2s_channel_write(audio, stereo, take * 4, &written,
-                                  portMAX_DELAY) != ESP_OK)
+                                  portMAX_DELAY) != ESP_OK
+                || written != take * 4)
                 puts("REMOTE_PCM i2s_write_failed");
+            silence_queued = false;
+        } else if (!silence_queued) {
+            /* Once queued speech drains, overwrite the repeating DMA ring
+               with silence.  New PCM can follow it without disabling I2S,
+               avoiding clicks and repeated final phonemes between network
+               messages or synthesis bursts. */
+            size_t written = 0;
+            esp_err_t result = i2s_channel_write(
+                audio, silence, sizeof(silence), &written, portMAX_DELAY);
+            printf("REMOTE_PCM silence_inserted bytes=%u result=%s\n",
+                   (unsigned)written, esp_err_to_name(result));
+            silence_queued = result == ESP_OK && written == sizeof(silence);
         } else {
             vTaskDelay(pdMS_TO_TICKS(2));
         }
@@ -576,11 +598,10 @@ void app_main(void)
         : transfer_mode_start(TRANSFER_WIFI_SSID,
                               TRANSFER_WIFI_PASSWORD, &status);
     is_remote_mode = status.remote_mode;
-    if (result != ESP_OK) {
-        speak(voice, is_remote_mode ? "NVDA remote could not start"
-                                    : "file transfer could not start");
-        for (;;) vTaskDelay(portMAX_DELAY);
-    }
+    /* The RTC hint can be lost during the reader's staged partition switch;
+       network.mode on the SD card is authoritative.  Therefore initialise
+       the buffered remote path only after transfer_mode has resolved the
+       requested mode, but before any remote success/error announcement. */
     if (is_remote_mode) {
         remote_pcm = heap_caps_malloc(REMOTE_PCM_SAMPLES
                                       * sizeof(*remote_pcm),
@@ -589,10 +610,17 @@ void app_main(void)
         ESP_ERROR_CHECK(remote_pcm && remote_pcm_mutex
                         ? ESP_OK : ESP_ERR_NO_MEM);
         BaseType_t playback_created = xTaskCreatePinnedToCoreWithCaps(
-            remote_playback_task, "remote_pcm", 4096, NULL, 6, NULL, 1,
+            remote_playback_task, "remote_pcm", 16384, NULL, 6, NULL, 1,
             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         ESP_ERROR_CHECK(playback_created == pdPASS
                         ? ESP_OK : ESP_ERR_NO_MEM);
+    }
+    if (result != ESP_OK) {
+        speak(voice, is_remote_mode ? "NVDA remote could not start"
+                                    : "file transfer could not start");
+        for (;;) vTaskDelay(portMAX_DELAY);
+    }
+    if (is_remote_mode) {
         speak(voice, "NVDA remote connecting");
         BaseType_t created = xTaskCreateWithCaps(
             remote_network_task, "nvda_remote", 16384, NULL, 4, NULL,
