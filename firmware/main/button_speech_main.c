@@ -2313,12 +2313,18 @@ static void reader_recording_task(void *argument)
         success = false;
 
     i2s_chan_config_t channel =
-        I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO, I2S_ROLE_MASTER);
+        I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_1, I2S_ROLE_MASTER);
     /* Internal DMA RAM is deliberately scarce while a book is cached.  The
        SD writer drains this small ring comfortably at 32 kHz. */
-    channel.dma_desc_num = 4;
-    channel.dma_frame_num = 64;
+    channel.dma_desc_num = 2;
+    channel.dma_frame_num = 32;
+    printf("RECORDING dma free_internal=%u largest_dma=%u descriptors=%u frames=%u\n",
+           (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+           (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA),
+           (unsigned)channel.dma_desc_num,
+           (unsigned)channel.dma_frame_num);
     esp_err_t i2s_result = ESP_OK;
+    bool rx_enabled = false;
     if (success && (i2s_result = i2s_new_channel(&channel, NULL, &rx)) != ESP_OK) {
         printf("RECORDING i2s_new_channel failed=%s free_internal=%u largest_dma=%u\n",
                esp_err_to_name(i2s_result),
@@ -2347,6 +2353,8 @@ static void reader_recording_task(void *argument)
         printf("RECORDING i2s_enable failed=%s\n", esp_err_to_name(i2s_result));
         success = false;
     }
+    if (success)
+        rx_enabled = true;
     if (success)
         puts("RECORDING microphone active");
 
@@ -2380,7 +2388,8 @@ static void reader_recording_task(void *argument)
     }
     if (rx) {
         puts("RECORDING stopping microphone");
-        (void)i2s_channel_disable(rx);
+        if (rx_enabled)
+            (void)i2s_channel_disable(rx);
         (void)i2s_del_channel(rx);
     }
     if (output) {
