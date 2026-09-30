@@ -9,5 +9,5 @@ at flash address 0x610000.
 Target: Freenove Media Kit for ESP32-S3, 1.14-inch model, 16 MB flash.
 
 SHA-256 for freenoveKit_Epub-alpha.bin:
-46b44b88e1fc71d4a7cb6e3473ae04615b5ef117234ad2c57644723a7fbdf699
+df6acba9475ca600feb3ca7b3e754cb99bb31cc7eaaf16ffe541567a79a109b0
 
