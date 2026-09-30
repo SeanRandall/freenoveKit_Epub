@@ -21,7 +21,7 @@ list(REMOVE_ITEM LANGUAGE_SOURCES ${COMPILED_RULE_SOURCES})
 set(APP_REQUIREMENTS
     esp_timer esp_psram esp_driver_i2s esp_adc nvs_flash esp_wifi
     esp_event esp_netif esp_http_server fatfs sdmmc mdns app_update
-    esp-tls mbedtls lwip)
+    esp-tls mbedtls lwip esp_driver_tsens)
 message(STATUS "Firmware source ${EVV_APP_SOURCE}; requirements ${APP_REQUIREMENTS}")
 
 idf_component_register(
@@ -51,6 +51,7 @@ idf_component_register(
 
 target_compile_options(${COMPONENT_LIB} PRIVATE
     -O3
+    -fno-strict-aliasing
     -Wno-error
     -Wno-attributes
     -Wno-unused-function
@@ -60,7 +61,10 @@ target_compile_options(${COMPONENT_LIB} PRIVATE
     -Wno-error=stringop-truncation
 )
 
-target_compile_definitions(${COMPONENT_LIB} PRIVATE EVV_NO_BYTECODE=1)
+
+target_compile_definitions(${COMPONENT_LIB} PRIVATE
+    EVV_NO_BYTECODE=1
+    EVV_FRAME_STACK=65536)
 
 if("${EVV_APP_SOURCE}" STREQUAL "webdav_transfer_main.c")
     if(DEFINED TRANSFER_WIFI_SSID AND DEFINED TRANSFER_WIFI_PASSWORD)

@@ -661,7 +661,9 @@ void evv_arena_outstanding(const char *when)
 
 /* ---- one rule's frame ------------------------------------------------- */
 
-#if defined(ESP_PLATFORM)
+#if defined(EVV_FRAME_STACK)
+#define FRAME_STACK ((size_t)(EVV_FRAME_STACK))
+#elif defined(ESP_PLATFORM)
 /* Leave room in the S3's 8 MB PSRAM for the embedded language and capture. */
 #define FRAME_STACK (2u * 1024u * 1024u)
 #else

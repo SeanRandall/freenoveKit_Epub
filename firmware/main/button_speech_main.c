@@ -11,6 +11,7 @@
 #include <unistd.h>
 
 #include "driver/i2s_std.h"
+#include "driver/temperature_sensor.h"
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
 #include "esp_adc/adc_oneshot.h"
@@ -60,6 +61,7 @@ void evv_port_start(void);
 #define FRAME_SAMPLES 2048
 #define PAUSE_REWIND_MS 500
 #define ROLLING_START_MS 6000
+#define READER_PCM_BYTES ((7u * 1024u * 1024u) / 2u)
 #define READER_RETAIN_SAMPLES (SAMPLE_RATE * 8)
 #define READER_RING_LOW_SAMPLES (SAMPLE_RATE * 30)
 #define READER_RING_HIGH_SAMPLES (SAMPLE_RATE * 60)
@@ -78,9 +80,11 @@ void evv_port_start(void);
 #define BUTTON_ADC_CHANNEL ADC_CHANNEL_8 /* GPIO19 on ESP32-S3 */
 
 static const char *const TAG = "button_speech";
-static int16_t mono_frame[FRAME_SAMPLES];
-static int16_t stereo_frame[FRAME_SAMPLES * 2];
+static int16_t *mono_frame;
+static int16_t *stereo_frame;
+static int16_t *reader_playback_frame;
 static i2s_chan_handle_t tx_channel;
+static temperature_sensor_handle_t temperature_sensor;
 static volatile size_t speech_samples;
 static volatile uint32_t requested_generation;
 static uint32_t active_generation;
@@ -118,6 +122,9 @@ static bool reader_sentence_continuation;
 static char reader_text_chunk[768];
 static char reader_substituted_chunk[768];
 static bool reader_render_overflow;
+static int64_t reader_chunk_started_us;
+static size_t reader_chunk_started_samples;
+static size_t reader_chunk_started_bytes;
 static bool reader_pcm_valid;
 static int reader_pcm_rate;
 static nvs_handle_t reader_prefs;
@@ -167,9 +174,10 @@ enum ReaderStatusField {
     READER_STATUS_BATTERY_TIME,
     READER_STATUS_SLEEP_REMAINING,
     READER_STATUS_SD_SPACE,
+    READER_STATUS_DEVICE_TEMPERATURE,
     READER_STATUS_COUNT,
 };
-static uint8_t reader_status_order[READER_STATUS_COUNT] = {0, 1, 2, 3, 4, 5, 6, 7};
+static uint8_t reader_status_order[READER_STATUS_COUNT] = {0, 1, 2, 3, 4, 5, 6, 7, 8};
 static uint32_t reader_status_enabled =
     (1U << READER_STATUS_TIME) | (1U << READER_STATUS_FILE_REMAINING)
     | (1U << READER_STATUS_BATTERY_LEVEL);
@@ -332,6 +340,10 @@ static enum ECICallbackReturn STDCALL on_message(OldInst *instance,
             size_t write_at = reader_pcm_samples % reader_pcm_capacity;
             size_t first = reader_pcm_capacity - write_at;
             if (first > count) first = count;
+            if (first < count)
+                printf("PCM_RING_WRITE_WRAP absolute=%u physical=%u count=%u\n",
+                       (unsigned)reader_pcm_samples, (unsigned)write_at,
+                       (unsigned)count);
             memcpy(reader_pcm + write_at, mono_frame,
                    first * sizeof(int16_t));
             if (first < count)
@@ -378,10 +390,12 @@ static esp_err_t init_audio(void)
 {
     i2s_chan_config_t channel_cfg =
         I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO, I2S_ROLE_MASTER);
-    /* Keep roughly 280 ms queued in hardware: enough to bridge a late
+    /* Keep roughly 140 ms queued in hardware: the PSRAM PCM ring supplies
+       the longer lead, while a smaller DMA queue preserves internal RAM for
+       OpenEVV's deferred locks with the 32 KB instruction cache.
        playback-task wakeup without taking so much internal DMA RAM that
        OpenEVV's own mutex allocation fails. */
-    channel_cfg.dma_desc_num = 12;
+    channel_cfg.dma_desc_num = 6;
     channel_cfg.dma_frame_num = 256;
     ESP_RETURN_ON_ERROR(i2s_new_channel(&channel_cfg, &tx_channel, NULL),
                         TAG, "create I2S channel");
@@ -752,24 +766,38 @@ static bool reader_start_next_text_chunk(OldInst *instance)
     }
     /* Prefer one complete sentence. Long sentences still split at a safe word
        boundary so OpenEVV regularly yields its core. */
-    size_t take = until_section < 180 ? until_section : 180;
+    /* At faster voices a fixed amount of text yields fewer seconds of PCM,
+       while OpenEVV still pays its per-request setup cost.  Give it more text
+       per request so synthesis can stay ahead without increasing the cold
+       six-second playback delay.  The buffers below have room for 767 bytes. */
+    size_t chunk_target = reader_rate <= 115 ? 180
+        : reader_rate <= 120 ? 320
+        : reader_rate <= 130 ? 480 : 640;
+    size_t take = until_section < chunk_target ? until_section : chunk_target;
     bool sentence_ended = until_section <= take;
     if (take < until_section) {
-        for (size_t at = 0; at < take; ++at) {
+        /* Batch as many complete sentences as fit.  Previously assigning
+           `take = after` inside this loop also shortened the loop bound, so
+           every request stopped at the *first* sentence despite the larger
+           target.  Keep the scan limit fixed and remember the last boundary. */
+        const size_t scan_limit = take;
+        size_t last_sentence_boundary = 0;
+        for (size_t at = 0; at < scan_limit; ++at) {
             unsigned char c = (unsigned char)reader_book_text[chunk_start + at];
             if (c != '.' && c != '?' && c != '!') continue;
             size_t after = at + 1;
-            while (after < until_section && after < take
+            while (after < until_section && after < scan_limit
                    && strchr("\"')\x92\x94", reader_book_text[chunk_start + after]))
                 ++after;
             if (after == until_section
                 || reader_book_text[chunk_start + after] == ' ') {
-                take = after;
-                sentence_ended = true;
-                break;
+                last_sentence_boundary = after;
             }
         }
-        if (!sentence_ended) {
+        if (last_sentence_boundary != 0) {
+            take = last_sentence_boundary;
+            sentence_ended = true;
+        } else {
             size_t boundary = take;
             while (boundary > 90
                    && reader_book_text[chunk_start + boundary] != ' ')
@@ -785,8 +813,12 @@ static bool reader_start_next_text_chunk(OldInst *instance)
         ++reader_text_offset;
 
     reader_rendering = true;
-    printf("SYNTH_CHUNK bytes=%u text_offset=%u\n", (unsigned)take,
-           (unsigned)reader_text_offset);
+    size_t lead_before = reader_pcm_samples >= reader_play_offset
+        ? reader_pcm_samples - reader_play_offset : 0;
+    printf("SYNTH_CHUNK rate=%d target=%u bytes=%u text_offset=%u lead_ms=%u\n",
+           reader_rate, (unsigned)chunk_target, (unsigned)take,
+           (unsigned)reader_text_offset,
+           (unsigned)(lead_before * 1000 / SAMPLE_RATE));
     if (!reader_sentence_continuation
         && reader_marker_count < reader_marker_capacity) {
         size_t marker = reader_marker_count++;
@@ -801,6 +833,9 @@ static bool reader_start_next_text_chunk(OldInst *instance)
     reader_log_dash_context("RESULT", synthesis_text);
     (void)ev_setParam(instance, PARAM_INPUT_TYPE,
                       reader_dictionary_commands ? 1 : 0);
+    reader_chunk_started_us = esp_timer_get_time();
+    reader_chunk_started_samples = reader_pcm_samples;
+    reader_chunk_started_bytes = take;
     if (!et_addText(instance, synthesis_text) || !et_synthesize(instance)) {
         reader_rendering = false;
         return false;
@@ -873,6 +908,11 @@ static bool reader_load_book(OldInst *instance, uint32_t generation)
 {
     int64_t started_us = esp_timer_get_time();
     reader_pcm_samples = 0;
+    /* Absolute ring counters belong to the discarded cache. Reset the read
+       counter at the same time as the write counter; retaining an offset from
+       the previous rate makes the unsigned free-space calculation underflow
+       and regeneration wait forever. */
+    reader_play_offset = 0;
     reader_render_overflow = false;
     reader_pcm_valid = false;
     reader_loaded = false;
@@ -1112,14 +1152,26 @@ static bool reader_play_pcm(uint32_t generation)
         if (section_pause_at != SIZE_MAX && at < section_pause_at
             && made > section_pause_at - at)
             made = section_pause_at - at;
+        size_t physical_at = at % reader_pcm_capacity;
+        if (made > reader_pcm_capacity - physical_at)
+            printf("PCM_RING_READ_WRAP absolute=%u physical=%u count=%u lead_ms=%u\n",
+                   (unsigned)at, (unsigned)physical_at, (unsigned)made,
+                   (unsigned)(lead * 1000 / SAMPLE_RATE));
+        /* This frame belongs only to book playback.  UI tones and short
+           announcements use stereo_frame, so they cannot alter data while
+           the I2S driver is consuming a book frame.  Clear the unused tail as
+           well: if a future driver/configuration queues whole DMA frames,
+           silence is emitted instead of samples left by an earlier write. */
+        memset(reader_playback_frame, 0,
+               FRAME_SAMPLES * 2 * sizeof(*reader_playback_frame));
         for (size_t i = 0; i < made; ++i) {
             int32_t combined = reader_pcm[(at + i) % reader_pcm_capacity];
             if (combined > INT16_MAX) combined = INT16_MAX;
             if (combined < INT16_MIN) combined = INT16_MIN;
             int16_t sample = reader_scale_sample((int16_t)combined,
                                                  reader_volume);
-            stereo_frame[i * 2] = sample;
-            stereo_frame[i * 2 + 1] = sample;
+            reader_playback_frame[i * 2] = sample;
+            reader_playback_frame[i * 2 + 1] = sample;
         }
         xSemaphoreGive(reader_pcm_mutex);
         size_t written = 0;
@@ -1129,9 +1181,13 @@ static bool reader_play_pcm(uint32_t generation)
             worst_feed_gap_us = feed_gap_us;
         if (feed_gap_us > 10000)
             ++feed_stalls;
-        if (i2s_channel_write(tx_channel, stereo_frame,
+        size_t expected_bytes = made * 2 * sizeof(int16_t);
+        if (i2s_channel_write(tx_channel, reader_playback_frame,
                               made * 2 * sizeof(int16_t), &written,
-                              portMAX_DELAY) != ESP_OK) {
+                              portMAX_DELAY) != ESP_OK
+            || written != expected_bytes) {
+            printf("I2S_BOOK_WRITE_ERROR expected=%u written=%u\n",
+                   (unsigned)expected_bytes, (unsigned)written);
             reader_stop_audio();
             return false;
         }
@@ -1174,9 +1230,16 @@ static void reader_finish_book_render(OldInst *instance)
                 vTaskDelay(pdMS_TO_TICKS(1));
             eo_synchronizeSynth(instance);
             reader_rendering = false;
-            printf("SYNTH_RESULT added_samples=%u total_samples=%u\n",
-                   (unsigned)(reader_pcm_samples - before),
-                   (unsigned)reader_pcm_samples);
+            size_t added = reader_pcm_samples - reader_chunk_started_samples;
+            int64_t elapsed_us = esp_timer_get_time() - reader_chunk_started_us;
+            size_t lead = reader_pcm_samples >= reader_play_offset
+                ? reader_pcm_samples - reader_play_offset : 0;
+            printf("SYNTH_RESULT bytes=%u added_samples=%u audio_ms=%u synth_ms=%u lead_ms=%u total_samples=%u observed_before=%u\n",
+                   (unsigned)reader_chunk_started_bytes, (unsigned)added,
+                   (unsigned)(added * 1000 / SAMPLE_RATE),
+                   (unsigned)(elapsed_us / 1000),
+                   (unsigned)(lead * 1000 / SAMPLE_RATE),
+                   (unsigned)reader_pcm_samples, (unsigned)before);
             /* Let core 1's idle task service its watchdog between the
                engine's CPU-heavy synthesis requests. Playback has several
                seconds of lead on core 0, so this does not affect audio. */
@@ -1637,28 +1700,31 @@ static void reader_speak_menu_item(void)
                  "speaking rate. %d", reader_rate);
     else if (reader_menu_index == 1)
         snprintf(reader_announcement, sizeof(reader_announcement),
+                 "volume. %d percent", reader_volume);
+    else if (reader_menu_index == 2)
+        snprintf(reader_announcement, sizeof(reader_announcement),
                  "substitution dictionary. %s",
                  reader_substitutions_enabled ? "on" : "off");
-    else if (reader_menu_index == 2)
+    else if (reader_menu_index == 3)
         snprintf(reader_announcement, sizeof(reader_announcement),
                  "dictionary voice commands. %s",
                  reader_dictionary_commands ? "on" : "off");
-    else if (reader_menu_index == 3)
+    else if (reader_menu_index == 4)
         snprintf(reader_announcement, sizeof(reader_announcement),
                  "interface sounds. %s",
                  reader_interface_sounds ? "on" : "off");
-    else if (reader_menu_index == 4)
+    else if (reader_menu_index == 5)
         strlcpy(reader_announcement, "playing screen status items",
                 sizeof(reader_announcement));
-    else if (reader_menu_index == 5)
+    else if (reader_menu_index == 6)
         snprintf(reader_announcement, sizeof(reader_announcement),
                  "pause between sections. %s",
                  reader_pause_between_sections ? "on" : "off");
-    else if (reader_menu_index == 6)
+    else if (reader_menu_index == 7)
         snprintf(reader_announcement, sizeof(reader_announcement),
                  "on startup. %s",
                  reader_startup_resume ? "resume reading" : "library");
-    else if (reader_menu_index == 7) {
+    else if (reader_menu_index == 8) {
         if (reader_sleep_timer_choice)
             snprintf(reader_announcement, sizeof(reader_announcement),
                      "sleep timer. %u minutes%s",
@@ -1668,18 +1734,18 @@ static void reader_speak_menu_item(void)
             strlcpy(reader_announcement, "sleep timer. off",
                     sizeof(reader_announcement));
     }
-    else if (reader_menu_index == 8)
+    else if (reader_menu_index == 9)
         snprintf(reader_announcement, sizeof(reader_announcement),
                  "keypress resets sleep timer. %s",
                  reader_sleep_timer_reset_on_key ? "on" : "off");
-    else if (reader_menu_index == 9)
+    else if (reader_menu_index == 10)
         snprintf(reader_announcement, sizeof(reader_announcement),
                  "start sleep timer on boot. %s",
                  reader_sleep_timer_start_on_boot ? "on" : "off");
-    else if (reader_menu_index == 10)
+    else if (reader_menu_index == 11)
         strlcpy(reader_announcement, "file transfer",
                 sizeof(reader_announcement));
-    else if (reader_menu_index == 11)
+    else if (reader_menu_index == 12)
         strlcpy(reader_announcement, "NVDA remote",
                 sizeof(reader_announcement));
     else if (reader_menu_index == 12)
@@ -1744,7 +1810,7 @@ static const char *reader_status_name(unsigned field)
         "time", "date", "remaining section duration",
         "remaining file duration", "battery level",
         "battery time estimate", "sleep time remaining",
-        "remaining SD card space",
+        "remaining SD card space", "device temperature",
     };
     return field < READER_STATUS_COUNT ? names[field] : "status";
 }
@@ -1980,6 +2046,18 @@ static bool reader_status_sd_space(void)
     return true;
 }
 
+static bool reader_status_device_temperature(void)
+{
+    float celsius;
+    if (!temperature_sensor
+        || temperature_sensor_get_celsius(temperature_sensor, &celsius)
+               != ESP_OK)
+        return false;
+    snprintf(reader_announcement, sizeof(reader_announcement),
+             "%.1f degrees Celsius", (double)celsius);
+    return true;
+}
+
 static bool reader_prepare_status(unsigned field)
 {
     switch (field) {
@@ -1991,6 +2069,8 @@ static bool reader_prepare_status(unsigned field)
     case READER_STATUS_BATTERY_TIME: return false;
     case READER_STATUS_SLEEP_REMAINING: return reader_status_sleep_timer();
     case READER_STATUS_SD_SPACE: return reader_status_sd_space();
+    case READER_STATUS_DEVICE_TEMPERATURE:
+        return reader_status_device_temperature();
     default: return false;
     }
 }
@@ -2055,16 +2135,15 @@ static void reader_change_volume(int direction)
 {
     if (direction > 0) {
         if (reader_volume < 10) reader_volume += 2;
-        else reader_volume += 10;
+        else if (reader_volume < 100) reader_volume += 5;
         if (reader_volume > 100) reader_volume = 100;
     } else {
-        if (reader_volume > 10) reader_volume -= 10;
-        else reader_volume -= 2;
-        if (reader_volume < 2) reader_volume = 2;
+        if (reader_volume > 10) reader_volume -= 5;
+        else if (reader_volume > 2) reader_volume -= 2;
     }
     reader_save_preferences();
     snprintf(reader_announcement, sizeof(reader_announcement),
-             "volume. %d percent", reader_volume);
+             "volume %d percent", reader_volume);
     queue_audio(AUDIO_SPEECH, reader_announcement);
 }
 
@@ -2430,7 +2509,7 @@ static void reader_button_scan_task(void *argument)
                 up_opened_menu = false;
                 if (!reader_library && !reader_menu && !reader_paused) {
                     if (reader_volume < 10) reader_volume += 2;
-                    else if (reader_volume < 100) reader_volume += 10;
+                    else if (reader_volume < 100) reader_volume += 5;
                     if (reader_volume > 100) reader_volume = 100;
                     reader_save_preferences();
                     printf("READER volume_up=%d\n", reader_volume);
@@ -2455,20 +2534,22 @@ static void reader_button_scan_task(void *argument)
                         reader_move_status_item(-1);
                     else if (reader_menu_index == 0) reader_change_rate(-1);
                     else if (reader_menu_index == 1)
-                        reader_toggle_substitutions();
+                        reader_change_volume(-1);
                     else if (reader_menu_index == 2)
-                        reader_toggle_dictionary_commands();
+                        reader_toggle_substitutions();
                     else if (reader_menu_index == 3)
+                        reader_toggle_dictionary_commands();
+                    else if (reader_menu_index == 4)
                         reader_toggle_interface_sounds();
-                    else if (reader_menu_index == 5)
-                        reader_toggle_section_pause();
                     else if (reader_menu_index == 6)
-                        reader_toggle_startup();
+                        reader_toggle_section_pause();
                     else if (reader_menu_index == 7)
-                        reader_change_sleep_timer(-1);
+                        reader_toggle_startup();
                     else if (reader_menu_index == 8)
-                        reader_toggle_sleep_key_reset();
+                        reader_change_sleep_timer(-1);
                     else if (reader_menu_index == 9)
+                        reader_toggle_sleep_key_reset();
+                    else if (reader_menu_index == 10)
                         reader_toggle_sleep_start_on_boot();
                     else if (reader_menu_index == 12)
                         reader_change_volume(-1);
@@ -2507,32 +2588,32 @@ static void reader_button_scan_task(void *argument)
                         reader_toggle_status_item();
                     else if (reader_menu_index == READER_MENU_LAST)
                         reader_close_menu();
-                    else if (reader_menu_index == 10
-                             || reader_menu_index == 11) {
+                    else if (reader_menu_index == 11
+                             || reader_menu_index == 12) {
                         reader_paused = true;
                         if (!reader_library && reader_loaded)
                             reader_save_position();
-                        queue_audio(reader_menu_index == 11
+                        queue_audio(reader_menu_index == 12
                             ? AUDIO_SWITCH_REMOTE : AUDIO_SWITCH_TRANSFER,
                             NULL);
                     }
-                    else if (reader_menu_index == 1)
-                        reader_toggle_substitutions();
                     else if (reader_menu_index == 2)
-                        reader_toggle_dictionary_commands();
+                        reader_toggle_substitutions();
                     else if (reader_menu_index == 3)
-                        reader_toggle_interface_sounds();
+                        reader_toggle_dictionary_commands();
                     else if (reader_menu_index == 4)
-                        reader_open_status_menu();
+                        reader_toggle_interface_sounds();
                     else if (reader_menu_index == 5)
-                        reader_toggle_section_pause();
+                        reader_open_status_menu();
                     else if (reader_menu_index == 6)
-                        reader_toggle_startup();
+                        reader_toggle_section_pause();
                     else if (reader_menu_index == 7)
-                        reader_start_sleep_timer();
+                        reader_toggle_startup();
                     else if (reader_menu_index == 8)
-                        reader_toggle_sleep_key_reset();
+                        reader_start_sleep_timer();
                     else if (reader_menu_index == 9)
+                        reader_toggle_sleep_key_reset();
+                    else if (reader_menu_index == 10)
                         reader_toggle_sleep_start_on_boot();
                 } else if (reader_library) {
                     library_announcement_pending = false;
@@ -2607,20 +2688,22 @@ static void reader_button_scan_task(void *argument)
                 else if (reader_menu_index == 0)
                     reader_change_rate(1);
                 else if (reader_menu_index == 1)
-                    reader_toggle_substitutions();
+                    reader_change_volume(1);
                 else if (reader_menu_index == 2)
-                    reader_toggle_dictionary_commands();
+                    reader_toggle_substitutions();
                 else if (reader_menu_index == 3)
+                    reader_toggle_dictionary_commands();
+                else if (reader_menu_index == 4)
                     reader_toggle_interface_sounds();
-                else if (reader_menu_index == 5)
-                    reader_toggle_section_pause();
                 else if (reader_menu_index == 6)
-                    reader_toggle_startup();
+                    reader_toggle_section_pause();
                 else if (reader_menu_index == 7)
-                    reader_change_sleep_timer(1);
+                    reader_toggle_startup();
                 else if (reader_menu_index == 8)
-                    reader_toggle_sleep_key_reset();
+                    reader_change_sleep_timer(1);
                 else if (reader_menu_index == 9)
+                    reader_toggle_sleep_key_reset();
+                else if (reader_menu_index == 10)
                     reader_toggle_sleep_start_on_boot();
                 else if (reader_menu_index == 12)
                     reader_change_volume(1);
@@ -2634,7 +2717,7 @@ static void reader_button_scan_task(void *argument)
                 reader_speak_library_item();
             } else if (stable_key == 4) {
                 if (!reader_paused) {
-                    if (reader_volume > 10) reader_volume -= 10;
+                    if (reader_volume > 10) reader_volume -= 5;
                     else if (reader_volume > 2) reader_volume -= 2;
                     reader_save_preferences();
                     printf("READER volume=%d\n", reader_volume);
@@ -3148,6 +3231,19 @@ void app_main(void)
     static ButtonContext buttons;
     adc_cali_handle_t calibration = NULL;
 
+    /* These are staging buffers rather than DMA descriptors. Keeping them in
+       PSRAM preserves scarce internal RAM for OpenEVV's deferred locks while
+       allowing the faster 32 KB instruction-cache configuration. */
+    mono_frame = heap_caps_malloc(FRAME_SAMPLES * sizeof(*mono_frame),
+                                  MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    stereo_frame = heap_caps_malloc(FRAME_SAMPLES * 2 * sizeof(*stereo_frame),
+                                    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    reader_playback_frame = heap_caps_malloc(
+        FRAME_SAMPLES * 2 * sizeof(*reader_playback_frame),
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    ESP_ERROR_CHECK(mono_frame && stereo_frame && reader_playback_frame
+                    ? ESP_OK : ESP_ERR_NO_MEM);
+
     /* I2S is deliberately created on core 0. Its interrupt remains separate
        from the speech engine, which is created and owned on core 1 below. */
     ESP_ERROR_CHECK(init_audio());
@@ -3155,6 +3251,17 @@ void app_main(void)
            (unsigned)((esp_timer_get_time() - boot_started_us) / 1000));
     (void)play_wav_tone(unlocked_wav_start, unlocked_wav_end,
                         requested_generation);
+    temperature_sensor_config_t temperature_config =
+        TEMPERATURE_SENSOR_CONFIG_DEFAULT(10, 80);
+    esp_err_t temperature_result = temperature_sensor_install(
+        &temperature_config, &temperature_sensor);
+    if (temperature_result == ESP_OK)
+        temperature_result = temperature_sensor_enable(temperature_sensor);
+    if (temperature_result != ESP_OK) {
+        ESP_LOGW(TAG, "temperature sensor unavailable: %s",
+                 esp_err_to_name(temperature_result));
+        temperature_sensor = NULL;
+    }
     reader_load_preferences();
     if (reader_sleep_timer_start_on_boot && reader_sleep_timer_choice)
         reader_arm_sleep_timer();
@@ -3193,10 +3300,13 @@ void app_main(void)
                                                           &calibration));
     buttons.calibration = calibration;
 
-    reader_pcm_capacity = (2 * 1024 * 1024) / sizeof(int16_t);
+    reader_pcm_capacity = READER_PCM_BYTES / sizeof(int16_t);
     reader_pcm = heap_caps_malloc(reader_pcm_capacity * sizeof(int16_t),
                                   MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     ESP_ERROR_CHECK(reader_pcm != NULL ? ESP_OK : ESP_ERR_NO_MEM);
+    printf("PCM_RING bytes=%u free_psram=%u\n",
+           (unsigned)(reader_pcm_capacity * sizeof(int16_t)),
+           (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
     reader_pcm_mutex = xSemaphoreCreateMutex();
     ESP_ERROR_CHECK(reader_pcm_mutex != NULL ? ESP_OK : ESP_ERR_NO_MEM);
     reader_marker_capacity = 4096;
