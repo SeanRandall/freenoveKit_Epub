@@ -7,5 +7,5 @@ normal multi-image flashing process.
 Target: Freenove Media Kit for ESP32-S3, 1.14-inch model, 16 MB flash.
 
 SHA-256 for freenoveKit_Epub-alpha.bin:
-1e655eac9183f80cedb3928281becc11bb929a6ce64decc619d052239441e937
+fd42267272659c1de568f7ede5006f7236220d27862f4393e0290ee0d354c8d6
 

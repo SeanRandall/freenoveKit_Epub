@@ -70,7 +70,7 @@ void evv_port_start(void);
 #define PARAM_PHRASE_PREDICTION 13
 #define ENGINE_VOLUME_MAX 80
 #define PARAM_INPUT_TYPE 1
-#define READER_MENU_LAST 12
+#define READER_MENU_LAST 13
 #define I2S_BCLK GPIO_NUM_42
 #define I2S_LRCLK GPIO_NUM_41
 #define I2S_DATA GPIO_NUM_1
@@ -90,8 +90,8 @@ static QueueHandle_t audio_queue;
 static volatile bool reader_paused = true;
 static volatile bool reader_started;
 static volatile bool reader_finished;
-static volatile int reader_volume = 20;
-static volatile int reader_rate = 105;
+static volatile int reader_volume = 50;
+static volatile int reader_rate = 80;
 static volatile bool reader_loaded;
 static volatile size_t reader_play_offset;
 static volatile bool reader_audio_active;
@@ -1682,6 +1682,9 @@ static void reader_speak_menu_item(void)
     else if (reader_menu_index == 11)
         strlcpy(reader_announcement, "NVDA remote",
                 sizeof(reader_announcement));
+    else if (reader_menu_index == 12)
+        snprintf(reader_announcement, sizeof(reader_announcement),
+                 "volume. %d percent", reader_volume);
     else
         strlcpy(reader_announcement, "close menu",
                 sizeof(reader_announcement));
@@ -2048,6 +2051,23 @@ static void reader_change_rate(int direction)
     queue_audio(AUDIO_SPEECH, reader_announcement);
 }
 
+static void reader_change_volume(int direction)
+{
+    if (direction > 0) {
+        if (reader_volume < 10) reader_volume += 2;
+        else reader_volume += 10;
+        if (reader_volume > 100) reader_volume = 100;
+    } else {
+        if (reader_volume > 10) reader_volume -= 10;
+        else reader_volume -= 2;
+        if (reader_volume < 2) reader_volume = 2;
+    }
+    reader_save_preferences();
+    snprintf(reader_announcement, sizeof(reader_announcement),
+             "volume. %d percent", reader_volume);
+    queue_audio(AUDIO_SPEECH, reader_announcement);
+}
+
 static void reader_put_le16(uint8_t *p, uint16_t value)
 {
     p[0] = value & 0xff;
@@ -2381,9 +2401,11 @@ static void reader_button_scan_task(void *argument)
             }
             if (reader_ui_busy && stable_key != 0
                 && !(reader_menu
-                     && (stable_key == 2 || stable_key == 4))
+                     && (stable_key == 2 || stable_key == 3
+                         || stable_key == 4 || stable_key == 5))
                 && !(reader_library
-                     && (stable_key == 2 || stable_key == 4))
+                     && (stable_key == 2 || stable_key == 3
+                         || stable_key == 4 || stable_key == 5))
                 && !(!reader_paused && !reader_library && !reader_menu
                      && (stable_key == 2 || stable_key == 4))) {
                 suppressed_press = true;
@@ -2419,7 +2441,8 @@ static void reader_button_scan_task(void *argument)
                 if (!reader_paused && !reader_library && !reader_menu
                     && !locked)
                     reader_sentence_seek = -1;
-            } else if (stable_key == 5) {
+            } else if (stable_key == 5
+                       && !reader_menu && !reader_library) {
                 right_started = xTaskGetTickCount();
                 right_hold_handled = false;
                 if (!reader_paused && !reader_library && !reader_menu
@@ -2447,6 +2470,8 @@ static void reader_button_scan_task(void *argument)
                         reader_toggle_sleep_key_reset();
                     else if (reader_menu_index == 9)
                         reader_toggle_sleep_start_on_boot();
+                    else if (reader_menu_index == 12)
+                        reader_change_volume(-1);
                 } else if (reader_library) {
                     snprintf(reader_announcement, sizeof(reader_announcement),
                              "SD card root. %u documents",
@@ -2597,6 +2622,8 @@ static void reader_button_scan_task(void *argument)
                     reader_toggle_sleep_key_reset();
                 else if (reader_menu_index == 9)
                     reader_toggle_sleep_start_on_boot();
+                else if (reader_menu_index == 12)
+                    reader_change_volume(1);
             } else if (reader_library && stable_key == 4) {
                 if (reader_library_count
                     && reader_library_index + 1 < reader_library_count)
