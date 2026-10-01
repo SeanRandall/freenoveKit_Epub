@@ -107,6 +107,7 @@ static volatile bool reader_render_stop_requested;
 static volatile bool reader_production_complete;
 static volatile bool reader_play_task_running;
 static volatile bool reader_opening_tone_running;
+static volatile bool reader_opening_tone_stop;
 static volatile size_t reader_keypress_sample = SIZE_MAX;
 static volatile int32_t reader_seek_samples;
 static volatile int reader_sentence_seek;
@@ -142,6 +143,11 @@ static size_t reader_library_index;
 static bool reader_library_transition_announcement;
 static char reader_selected_path[320];
 static size_t reader_section_index;
+typedef enum {
+    READER_NAV_SECTION,
+    READER_NAV_HEADING,
+} ReaderNavigationMode;
+static ReaderNavigationMode reader_navigation_mode = READER_NAV_SECTION;
 static uint32_t reader_saved_section;
 static uint32_t reader_saved_text_offset;
 static size_t reader_section_base_offset;
@@ -193,6 +199,7 @@ static size_t reader_status_menu_index;
 static volatile bool reader_recording;
 static volatile bool reader_recording_stop;
 static TaskHandle_t reader_recording_task_handle;
+static i2s_chan_handle_t reader_recording_channel;
 typedef struct { char *from; char *to; } ReaderSubstitution;
 static ReaderSubstitution *reader_substitutions;
 static size_t reader_substitution_count;
@@ -1353,17 +1360,32 @@ static bool play_wav_tone_limited(const uint8_t *wav_start,
         return false;
     }
 
-    uint16_t format = read_le16(wav_start + 20);
-    uint16_t channels = read_le16(wav_start + 22);
-    uint32_t source_rate = read_le32(wav_start + 24);
-    uint16_t bits = read_le16(wav_start + 34);
-    uint32_t data_bytes = read_le32(wav_start + 40);
-    if ((size_t)data_bytes > wav_size - 44)
-        return false;
+    uint16_t format = 0, channels = 0, bits = 0;
+    uint32_t source_rate = 0, data_bytes = 0;
+    const uint8_t *data_start = NULL;
+    /* WAV permits metadata and other chunks between fmt and data.  Walk the
+       RIFF chunks instead of assuming every encoder emits a 44-byte header. */
+    for (size_t at = 12; at + 8 <= wav_size;) {
+        uint32_t chunk = read_le32(wav_start + at);
+        uint32_t chunk_bytes = read_le32(wav_start + at + 4);
+        size_t payload = at + 8;
+        if ((size_t)chunk_bytes > wav_size - payload)
+            return false;
+        if (chunk == UINT32_C(0x20746d66) && chunk_bytes >= 16) {
+            format = read_le16(wav_start + payload);
+            channels = read_le16(wav_start + payload + 2);
+            source_rate = read_le32(wav_start + payload + 4);
+            bits = read_le16(wav_start + payload + 14);
+        } else if (chunk == UINT32_C(0x61746164)) {
+            data_start = wav_start + payload;
+            data_bytes = chunk_bytes;
+        }
+        at = payload + chunk_bytes + (chunk_bytes & 1U);
+    }
     if (format != 1 || !channels || channels > 2 || bits != 16
-        || !source_rate)
+        || !source_rate || !data_start)
         return false;
-    const int16_t *pcm = (const int16_t *)(wav_start + 44);
+    const int16_t *pcm = (const int16_t *)data_start;
     size_t input_frames = data_bytes / (channels * sizeof(int16_t));
     if (maximum_ms) {
         size_t maximum_frames = (size_t)source_rate * maximum_ms / 1000;
@@ -1432,6 +1454,15 @@ static void reader_opening_tone_task(void *arg)
     (void)play_wav_tone_limited(opening_book_wav_start,
                                 opening_book_wav_end, generation,
                                 OPENING_BOOK_SOUND_MS);
+    while (!reader_opening_tone_stop
+           && generation == requested_generation) {
+        for (int i = 0; i < 30 && !reader_opening_tone_stop; ++i)
+            vTaskDelay(pdMS_TO_TICKS(100));
+        if (!reader_opening_tone_stop
+            && generation == requested_generation)
+            (void)play_wav_tone(keypress_wav_start, keypress_wav_end,
+                                generation);
+    }
     reader_opening_tone_running = false;
     vTaskDeleteWithCaps(NULL);
 }
@@ -1440,6 +1471,7 @@ static bool reader_start_opening_tone(uint32_t generation)
 {
     if (reader_opening_tone_running)
         return true;
+    reader_opening_tone_stop = false;
     reader_opening_tone_running = true;
     BaseType_t created = xTaskCreatePinnedToCoreWithCaps(
         reader_opening_tone_task, "opening_tone", 4096,
@@ -1736,6 +1768,97 @@ static void reader_move_section(int direction)
                  "%u of %u", (unsigned)reader_section_index + 1,
                  (unsigned)reader_document.section_count);
     queue_audio(AUDIO_NAVIGATION_SPEECH, reader_announcement);
+}
+
+static bool reader_has_navigation_markers(epub_marker_type_t type)
+{
+    for (size_t i = 0; i < reader_document.marker_count; ++i)
+        if (reader_document.markers[i].type == type)
+            return true;
+    return false;
+}
+
+static size_t reader_navigation_marker_count(epub_marker_type_t type)
+{
+    size_t count = 0;
+    for (size_t i = 0; i < reader_document.marker_count; ++i)
+        if (reader_document.markers[i].type == type)
+            ++count;
+    return count;
+}
+
+static void reader_cycle_navigation_mode(void)
+{
+    for (int attempts = 0; attempts < 2; ++attempts) {
+        reader_navigation_mode = (ReaderNavigationMode)(
+            (reader_navigation_mode + 1) % 2);
+        if (reader_navigation_mode == READER_NAV_SECTION
+            || (reader_navigation_mode == READER_NAV_HEADING
+                && reader_has_navigation_markers(EPUB_MARKER_HEADING)))
+            break;
+    }
+    size_t count = reader_navigation_mode == READER_NAV_SECTION
+        ? reader_document.section_count
+        : reader_navigation_marker_count(EPUB_MARKER_HEADING);
+    snprintf(reader_announcement, sizeof(reader_announcement), "%s, %u",
+             reader_navigation_mode == READER_NAV_SECTION
+                ? "sections" : "headings",
+             (unsigned)count);
+    queue_audio(AUDIO_SPEECH, reader_announcement);
+}
+
+static void reader_move_marker(int direction, epub_marker_type_t type)
+{
+    size_t current = reader_document.sections[reader_section_index].text_offset
+                     + reader_saved_text_offset;
+    size_t wanted = SIZE_MAX;
+    if (direction > 0) {
+        for (size_t i = 0; i < reader_document.marker_count; ++i) {
+            epub_marker_t *marker = &reader_document.markers[i];
+            if (marker->type == type && marker->text_offset > current) {
+                wanted = i;
+                break;
+            }
+        }
+    } else {
+        for (size_t i = reader_document.marker_count; i-- > 0;) {
+            epub_marker_t *marker = &reader_document.markers[i];
+            if (marker->type == type && marker->text_offset < current) {
+                wanted = i;
+                break;
+            }
+        }
+    }
+    if (wanted == SIZE_MAX) {
+        strlcpy(reader_announcement,
+                direction < 0 ? "first item" : "last item",
+                sizeof(reader_announcement));
+        queue_audio(AUDIO_SPEECH, reader_announcement);
+        return;
+    }
+    epub_marker_t *marker = &reader_document.markers[wanted];
+    reader_finished = false;
+    reader_map_absolute_position(marker->text_offset);
+    reader_save_section();
+    reader_section_change_pending = true;
+    reader_section_announcement = false;
+    reader_loaded = false;
+    reader_pcm_valid = false;
+    if (marker->name[0])
+        strlcpy(reader_announcement, marker->name,
+                sizeof(reader_announcement));
+    else
+        strlcpy(reader_announcement, "heading",
+                sizeof(reader_announcement));
+    queue_audio(AUDIO_NAVIGATION_SPEECH, reader_announcement);
+}
+
+static void reader_move_navigation(int direction)
+{
+    if (reader_navigation_mode == READER_NAV_SECTION)
+        reader_move_section(direction);
+    else
+        reader_move_marker(direction, EPUB_MARKER_HEADING);
 }
 
 static bool reader_has_epub_extension(const char *name)
@@ -2297,41 +2420,19 @@ static void reader_make_wav_header(uint8_t header[44], uint32_t data_bytes)
     reader_put_le32(header + 40, data_bytes);
 }
 
-static void reader_recording_task(void *argument)
+static esp_err_t reader_prepare_recording_channel(void)
 {
-    char *final_path = argument;
-    puts("RECORDING task entered");
-    char temporary_path[512];
-    snprintf(temporary_path, sizeof(temporary_path), "%s.tmp", final_path);
-    FILE *output = fopen(temporary_path, "wb+");
-    i2s_chan_handle_t rx = NULL;
-    bool success = output != NULL;
-    uint32_t data_bytes = 0;
-    uint8_t header[44];
-    reader_make_wav_header(header, 0);
-    if (success && fwrite(header, 1, sizeof(header), output) != sizeof(header))
-        success = false;
-
     i2s_chan_config_t channel =
         I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_1, I2S_ROLE_MASTER);
-    /* Internal DMA RAM is deliberately scarce while a book is cached.  The
-       SD writer drains this small ring comfortably at 32 kHz. */
-    channel.dma_desc_num = 2;
-    channel.dma_frame_num = 32;
-    printf("RECORDING dma free_internal=%u largest_dma=%u descriptors=%u frames=%u\n",
-           (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-           (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA),
-           (unsigned)channel.dma_desc_num,
-           (unsigned)channel.dma_frame_num);
-    esp_err_t i2s_result = ESP_OK;
-    bool rx_enabled = false;
-    if (success && (i2s_result = i2s_new_channel(&channel, NULL, &rx)) != ESP_OK) {
-        printf("RECORDING i2s_new_channel failed=%s free_internal=%u largest_dma=%u\n",
-               esp_err_to_name(i2s_result),
-               (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-               (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
-        success = false;
-    }
+    /* Reserve the original, comfortably sized microphone DMA ring before
+       OpenEVV fragments internal RAM.  Creating a tiny ring on demand made
+       recording possible, but left too little tolerance for an SD-card stall
+       and could produce periodic discontinuities that sounded like a buzz. */
+    channel.dma_desc_num = 4;
+    channel.dma_frame_num = 64;
+    ESP_RETURN_ON_ERROR(
+        i2s_new_channel(&channel, NULL, &reader_recording_channel),
+        TAG, "reserve recording I2S channel");
     i2s_std_config_t config = {
         .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(32000),
         .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(
@@ -2345,10 +2446,40 @@ static void reader_recording_task(void *argument)
             .invert_flags = { false, false, false },
         },
     };
-    if (success && (i2s_result = i2s_channel_init_std_mode(rx, &config)) != ESP_OK) {
-        printf("RECORDING i2s_init failed=%s\n", esp_err_to_name(i2s_result));
-        success = false;
+    esp_err_t result = i2s_channel_init_std_mode(reader_recording_channel,
+                                                  &config);
+    if (result != ESP_OK) {
+        (void)i2s_del_channel(reader_recording_channel);
+        reader_recording_channel = NULL;
+        return result;
     }
+    printf("RECORDING dma reserved descriptors=%u frames=%u largest_dma=%u\n",
+           (unsigned)channel.dma_desc_num,
+           (unsigned)channel.dma_frame_num,
+           (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
+    return ESP_OK;
+}
+
+static void reader_recording_task(void *argument)
+{
+    char *final_path = argument;
+    puts("RECORDING task entered");
+    char temporary_path[512];
+    snprintf(temporary_path, sizeof(temporary_path), "%s.tmp", final_path);
+    FILE *output = fopen(temporary_path, "wb+");
+    i2s_chan_handle_t rx = reader_recording_channel;
+    bool success = output != NULL && rx != NULL;
+    uint32_t data_bytes = 0;
+    uint8_t header[44];
+    reader_make_wav_header(header, 0);
+    if (success && fwrite(header, 1, sizeof(header), output) != sizeof(header))
+        success = false;
+
+    printf("RECORDING dma free_internal=%u largest_dma=%u\n",
+           (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+           (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
+    esp_err_t i2s_result = ESP_OK;
+    bool rx_enabled = false;
     if (success && (i2s_result = i2s_channel_enable(rx)) != ESP_OK) {
         printf("RECORDING i2s_enable failed=%s\n", esp_err_to_name(i2s_result));
         success = false;
@@ -2390,9 +2521,18 @@ static void reader_recording_task(void *argument)
         puts("RECORDING stopping microphone");
         if (rx_enabled)
             (void)i2s_channel_disable(rx);
-        (void)i2s_del_channel(rx);
     }
     if (output) {
+        /* The stop key is acoustically captured before the button scanner can
+           notify this task.  Remove the final 100 ms from the file. */
+        const uint32_t stop_trim_bytes = (32000U / 10U) * sizeof(int16_t);
+        if (fflush(output))
+            success = false;
+        if (success && data_bytes > stop_trim_bytes) {
+            data_bytes -= stop_trim_bytes;
+            if (ftruncate(fileno(output), 44 + data_bytes) != 0)
+                success = false;
+        }
         reader_make_wav_header(header, data_bytes);
         if (fseek(output, 0, SEEK_SET) ||
             fwrite(header, 1, sizeof(header), output) != sizeof(header))
@@ -2625,7 +2765,7 @@ static void reader_button_scan_task(void *argument)
                      && (stable_key == 2 || stable_key == 3
                          || stable_key == 4 || stable_key == 5))
                 && !(reader_library
-                     && (stable_key == 2 || stable_key == 3
+                     && (stable_key == 1 || stable_key == 2 || stable_key == 3
                          || stable_key == 4 || stable_key == 5))
                 && !(!reader_paused && !reader_library && !reader_menu
                      && (stable_key == 2 || stable_key == 4))) {
@@ -2704,7 +2844,7 @@ static void reader_button_scan_task(void *argument)
                     queue_audio(AUDIO_SPEECH, reader_announcement);
                 }
                 else if (!reader_library && reader_paused)
-                    reader_move_section(-1);
+                    reader_move_navigation(-1);
             } else if (stable_key == 0 && previous_key == 2
                        && !up_hold_handled && !locked) {
                 if (reader_menu) {
@@ -2724,6 +2864,8 @@ static void reader_button_scan_task(void *argument)
                         --reader_library_index;
                     library_announcement_pending = true;
                     library_changed_at = xTaskGetTickCount();
+                } else if (reader_paused) {
+                    reader_cycle_navigation_mode();
                 }
             } else if (stable_key == 0 && previous_key == 1
                        && !centre_hold_handled && !locked) {
@@ -2811,7 +2953,7 @@ static void reader_button_scan_task(void *argument)
             } else if (stable_key == 0 && previous_key == 5
                        && !right_hold_handled && !locked
                        && !reader_menu && !reader_library && reader_paused) {
-                reader_move_section(1);
+                reader_move_navigation(1);
             } else if (stable_key != 0 && locked) {
                 printf("BUTTON_IGNORED locked=1 key=%d\n", stable_key);
             } else if (reader_menu && stable_key == 4) {
@@ -3291,6 +3433,7 @@ static void reader_engine_task(void *arg)
                              esp_err_to_name(open_result));
                     reader_open_pending = false;
                     reader_library = true;
+                    reader_opening_tone_stop = true;
                     strlcpy(reader_announcement, "this book could not be opened",
                             sizeof(reader_announcement));
                     (void)speak(instance, reader_announcement, event.generation);
@@ -3307,10 +3450,12 @@ static void reader_engine_task(void *arg)
                 reader_select_section_text();
                 reader_open_pending = false;
                 reader_library = false;
-                printf("EPUB_READY title=%s text_bytes=%u sections=%u\n",
+                printf("EPUB_READY title=%s text_bytes=%u sections=%u markers=%u truncated=%d\n",
                        reader_document.title,
                        (unsigned)reader_document.text_length,
-                       (unsigned)reader_document.section_count);
+                       (unsigned)reader_document.section_count,
+                       (unsigned)reader_document.marker_count,
+                       reader_document.truncated ? 1 : 0);
             }
             if (reader_section_announcement) {
                 reader_section_announcement = false;
@@ -3340,8 +3485,10 @@ static void reader_engine_task(void *arg)
             if (!reader_load_book(instance, event.generation)) {
                 ESP_LOGE(TAG, "book load failed");
                 reader_loaded = false;
+                reader_opening_tone_stop = true;
                 continue;
             }
+            reader_opening_tone_stop = true;
             while (reader_opening_tone_running)
                 vTaskDelay(pdMS_TO_TICKS(5));
             int64_t ready_us = esp_timer_get_time();
@@ -3504,7 +3651,9 @@ void app_main(void)
     setenv("TZ", "GMT0BST,M3.5.0/1,M10.5.0/2", 1);
     tzset();
     if (REG_READ(RTC_CNTL_STORE0_REG) == BOOT_REQUEST_TRANSFER) {
-        REG_WRITE(RTC_CNTL_STORE0_REG, 0);
+        /* Leave the one-shot request intact for the network partition to
+           consume.  Its absence on a later reset is how that partition now
+           distinguishes an intentional entry from a crash or power cycle. */
         const esp_partition_t *transfer = esp_partition_find_first(
             ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_0,
             "transfer");
@@ -3533,6 +3682,10 @@ void app_main(void)
     /* I2S is deliberately created on core 0. Its interrupt remains separate
        from the speech engine, which is created and owned on core 1 below. */
     ESP_ERROR_CHECK(init_audio());
+    esp_err_t recording_audio_result = reader_prepare_recording_channel();
+    if (recording_audio_result != ESP_OK)
+        ESP_LOGW(TAG, "recording input unavailable: %s",
+                 esp_err_to_name(recording_audio_result));
     printf("BOOT_STAGE audio_ms=%u core=0\n",
            (unsigned)((esp_timer_get_time() - boot_started_us) / 1000));
     (void)play_wav_tone(unlocked_wav_start, unlocked_wav_end,

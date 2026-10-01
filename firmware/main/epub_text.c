@@ -294,7 +294,42 @@ static void extract_heading(const char *html, char *out, size_t capacity)
     out[used] = 0;
 }
 
-static void html_to_text(const char *html, char *out, size_t *used)
+static void add_marker(epub_document_t *document, epub_marker_type_t type,
+                       uint8_t level, size_t offset, const char *name)
+{
+    if (document->marker_count >= EPUB_MAX_MARKERS)
+        return;
+    epub_marker_t *marker = &document->markers[document->marker_count++];
+    marker->type = type;
+    marker->level = level;
+    marker->text_offset = offset;
+    if (name)
+        strlcpy(marker->name, name, sizeof(marker->name));
+}
+
+static void append_image_alt(const char *description, char *out, size_t *used)
+{
+    if (!description || !description[0]) return;
+    append_space(out, used);
+    for (const char *p = description; *p && *used + 2 < MAX_BOOK_TEXT;) {
+        if (*p == '&') {
+            if (!strncmp(p, "&amp;", 5)) { out[(*used)++] = '&'; p += 5; continue; }
+            if (!strncmp(p, "&quot;", 6)) { out[(*used)++] = '"'; p += 6; continue; }
+            if (!strncmp(p, "&apos;", 6)) { out[(*used)++] = '\''; p += 6; continue; }
+            if (!strncmp(p, "&nbsp;", 6)) { append_space(out, used); p += 6; continue; }
+        }
+        size_t bytes = 1;
+        uint32_t cp = utf8_codepoint((const unsigned char *)p, &bytes);
+        unsigned char c = windows_1252(cp);
+        p += bytes;
+        if (isspace(c)) append_space(out, used);
+        else if (c >= 32) out[(*used)++] = (char)c;
+    }
+    append_space(out, used);
+}
+
+static void html_to_text(const char *html, char *out, size_t *used,
+                         epub_document_t *document)
 {
     /* XHTML metadata belongs to the document head, not the reading stream.
        Begin at the body when it is present so <title> and other head text can
@@ -309,8 +344,26 @@ static void html_to_text(const char *html, char *out, size_t *used)
         }
     }
     bool tag = false, suppress = false;
-    for (size_t i = 0; body[i] && *used + 2 < MAX_BOOK_TEXT;) {
+    size_t i = 0;
+    for (; body[i] && *used + 2 < MAX_BOOK_TEXT;) {
         if (!tag && body[i] == '<') {
+            const char *element = body + i;
+            if (element[1] && tolower((unsigned char)element[1]) == 'h'
+                && element[2] >= '1' && element[2] <= '6'
+                && (isspace((unsigned char)element[3])
+                    || element[3] == '>')) {
+                char heading[sizeof(document->sections[0].name)] = { 0 };
+                extract_heading(element, heading, sizeof(heading));
+                add_marker(document, EPUB_MARKER_HEADING,
+                           (uint8_t)(element[2] - '0'), *used, heading);
+            } else if (!strncasecmp(element, "<img", 4)
+                       && (isspace((unsigned char)element[4])
+                           || element[4] == '>')) {
+                char description[96] = { 0 };
+                (void)attribute(element, "alt", description,
+                                sizeof(description));
+                append_image_alt(description, out, used);
+            }
             bool block = is_block_tag(body + i);
             tag = true;
             if (!strncasecmp(body + i, "<script", 7)
@@ -346,6 +399,8 @@ static void html_to_text(const char *html, char *out, size_t *used)
         if (isspace(c)) append_space(out, used);
         else if (c >= 32) out[(*used)++] = (char)c;
     }
+    if (body[i])
+        document->truncated = true;
     append_space(out, used);
 }
 
@@ -394,8 +449,11 @@ esp_err_t epub_load_document(const char *path, epub_document_t *document)
         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     document->sections = heap_caps_calloc(EPUB_MAX_SECTIONS,
         sizeof(*document->sections), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!book || !document->sections) {
-        free(book); free(document->sections); document->sections = NULL;
+    document->markers = heap_caps_calloc(EPUB_MAX_MARKERS,
+        sizeof(*document->markers), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!book || !document->sections || !document->markers) {
+        free(book); free(document->sections); free(document->markers);
+        document->sections = NULL; document->markers = NULL;
         free(items); free(opf); fclose(zip.file); return ESP_ERR_NO_MEM;
     }
     size_t used = 0;
@@ -410,7 +468,7 @@ esp_err_t epub_load_document(const char *path, epub_document_t *document)
                 char *html = zip_extract(&zip, entry, &html_length);
                 if (html) {
                     size_t section_start = used;
-                    html_to_text(html, book, &used);
+                    html_to_text(html, book, &used, document);
                     while (used > section_start && book[used - 1] == ' ')
                         --used;
                     if (used > section_start
@@ -418,7 +476,6 @@ esp_err_t epub_load_document(const char *path, epub_document_t *document)
                         epub_section_t *section =
                             &document->sections[document->section_count++];
                         section->text_offset = section_start;
-                        section->text_length = used - section_start;
                         extract_heading(html, section->name,
                                         sizeof(section->name));
                         append_space(book, &used);
@@ -429,12 +486,15 @@ esp_err_t epub_load_document(const char *path, epub_document_t *document)
             }
         }
         ++p;
+        if (document->truncated)
+            break;
     }
     free(items); free(opf); fclose(zip.file);
     while (used && book[used - 1] == ' ') --used;
     book[used] = 0;
     if (!used) {
-        free(book); free(document->sections); document->sections = NULL;
+        free(book); free(document->sections); free(document->markers);
+        document->sections = NULL; document->markers = NULL;
         return ESP_ERR_INVALID_RESPONSE;
     }
     document->text = book;
@@ -442,6 +502,14 @@ esp_err_t epub_load_document(const char *path, epub_document_t *document)
     if (!document->section_count) {
         document->section_count = 1;
         document->sections[0].text_length = used;
+    } else {
+        for (size_t i = 0; i < document->section_count; ++i) {
+            size_t end = i + 1 < document->section_count
+                ? document->sections[i + 1].text_offset : used;
+            document->sections[i].text_length =
+                end > document->sections[i].text_offset
+                    ? end - document->sections[i].text_offset : 0;
+        }
     }
     return ESP_OK;
 }
@@ -450,5 +518,6 @@ void epub_free_document(epub_document_t *document)
 {
     free(document->text);
     free(document->sections);
+    free(document->markers);
     memset(document, 0, sizeof(*document));
 }

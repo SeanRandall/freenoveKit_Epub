@@ -1,4 +1,5 @@
 #include <stdbool.h>
+#include <ctype.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -49,6 +50,7 @@ void evv_port_start(void);
 
 #define FRAME_SAMPLES 2048
 #define BOOT_REQUEST_READER UINT32_C(0x45565652)
+#define BOOT_REQUEST_TRANSFER UINT32_C(0x45565654)
 #define VOICE_SPEED 6
 #define VOICE_VOLUME 7
 #define ENGINE_VOLUME_MAX 80
@@ -115,7 +117,7 @@ static enum ECICallbackReturn STDCALL waveform(OldInst *voice,
                 remote_pcm_started = true;
             xSemaphoreGive(remote_pcm_mutex);
             offset += copy;
-            if (!copy) vTaskDelay(pdMS_TO_TICKS(2));
+            if (!copy) vTaskDelay(pdMS_TO_TICKS(1));
         }
         return remote_cancel ? eciDataAbort : eciDataProcessed;
     }
@@ -131,12 +133,14 @@ static enum ECICallbackReturn STDCALL waveform(OldInst *voice,
 
 static void remote_pcm_begin(size_t text_length)
 {
+    (void)text_length;
     xSemaphoreTake(remote_pcm_mutex, portMAX_DELAY);
     remote_pcm_read = remote_pcm_write = remote_pcm_count = 0;
     remote_pcm_synthesis_done = false;
     remote_pcm_started = false;
-    remote_pcm_prefill = text_length <= 24 ? 1
-                       : text_length <= 80 ? 2048 : 8192;
+    /* OpenEVV produces PCM faster than playback on this board.  Start with
+       its first sample instead of imposing a sentence-sized latency tax. */
+    remote_pcm_prefill = 1;
     remote_pcm_session = true;
     xSemaphoreGive(remote_pcm_mutex);
 }
@@ -192,7 +196,7 @@ static void remote_playback_task(void *arg)
         } else if (session && started && !done && !remote_pcm_count) {
             ++remote_pcm_underflows;
             remote_pcm_started = started = false;
-            remote_pcm_prefill = 4096;
+            remote_pcm_prefill = 1;
         }
         xSemaphoreGive(remote_pcm_mutex);
         if (take) {
@@ -216,7 +220,7 @@ static void remote_playback_task(void *arg)
                    (unsigned)written, esp_err_to_name(result));
             silence_queued = result == ESP_OK && written == sizeof(silence);
         } else {
-            vTaskDelay(pdMS_TO_TICKS(2));
+            vTaskDelay(pdMS_TO_TICKS(1));
         }
     }
 }
@@ -234,7 +238,7 @@ static void speak(OldInst *voice, const char *text)
     if (et_addText(voice, text) && et_synthesize(voice)) {
         TickType_t limit = xTaskGetTickCount() + pdMS_TO_TICKS(12000);
         while (eo_speaking(voice) && xTaskGetTickCount() < limit)
-            vTaskDelay(pdMS_TO_TICKS(5));
+            vTaskDelay(pdMS_TO_TICKS(1));
         eo_synchronizeSynth(voice);
     }
     if (is_remote_mode) {
@@ -245,7 +249,7 @@ static void speak(OldInst *voice, const char *text)
         TickType_t drain_limit = xTaskGetTickCount() + pdMS_TO_TICKS(30000);
         while (remote_pcm_session && !remote_cancel
                && xTaskGetTickCount() < drain_limit)
-            vTaskDelay(pdMS_TO_TICKS(2));
+            vTaskDelay(pdMS_TO_TICKS(1));
         printf("REMOTE_PCM text=%u prefill=%u underflows=%u\n",
                (unsigned)strlen(text), (unsigned)remote_pcm_prefill,
                remote_pcm_underflows);
@@ -340,22 +344,14 @@ static void append_utf8(char *out, size_t capacity, size_t *used,
     memcpy(out + *used, bytes, count); *used += count;
 }
 
-/* Extract only top-level strings from NVDA's abstract speech sequence.
-   Command objects are deliberately ignored in this first listening build. */
-static char *remote_extract_speech(const char *json)
+static size_t remote_decode_json_string(const char *start, const char *limit,
+                                        char *out, size_t capacity,
+                                        const char **after)
 {
-    const char *sequence = strstr(json, "\"sequence\"");
-    if (!sequence || !(sequence = strchr(sequence, '['))) return NULL;
-    char *out = heap_caps_malloc(1024, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!out) return NULL;
-    size_t used = 0; int object_depth = 0;
-    for (const char *p = sequence + 1; *p && used < 1023; ++p) {
-        if (*p == ']') break;
-        if (*p == '{') { ++object_depth; continue; }
-        if (*p == '}') { if (object_depth) --object_depth; continue; }
-        if (*p != '"') continue;
-        bool keep = object_depth == 0;
-        while (*++p && *p != '"') {
+    size_t used = 0;
+    const char *p = start;
+    if (p >= limit || *p != '"') return 0;
+    while (++p < limit && *p && *p != '"') {
             unsigned value = (unsigned char)*p;
             if (*p == '\\' && p[1]) {
                 ++p;
@@ -370,12 +366,137 @@ static char *remote_extract_speech(const char *json)
                             : c >= 'a' && c <= 'f' ? c-'a'+10
                             : c >= 'A' && c <= 'F' ? c-'A'+10 : 0);
                     }
-                    if (keep) append_utf8(out, 1024, &used, value);
+                    append_utf8(out, capacity, &used, value);
                     continue;
                 } else value = (unsigned char)*p;
             }
-            if (keep && used < 1023) out[used++] = (char)value;
+            if (used + 1 < capacity) out[used++] = (char)value;
+    }
+    out[used] = 0;
+    if (after) *after = p < limit ? p + 1 : p;
+    return used;
+}
+
+static const char *remote_character_name(unsigned char character)
+{
+    static const char *const letters[] = {
+        "ay", "bee", "see", "dee", "ee", "eff", "gee", "aitch",
+        "eye", "jay", "kay", "ell", "em", "en", "oh", "pee",
+        "cue", "are", "ess", "tee", "you", "vee", "double you",
+        "ex", "why", "zed",
+    };
+    static const char *const digits[] = {
+        "zero", "one", "two", "three", "four",
+        "five", "six", "seven", "eight", "nine",
+    };
+    unsigned char lower = (unsigned char)tolower(character);
+    if (lower >= 'a' && lower <= 'z') return letters[lower - 'a'];
+    if (character >= '0' && character <= '9') return digits[character - '0'];
+    switch (character) {
+        case ' ': return "space"; case '.': return "dot";
+        case ',': return "comma"; case ':': return "colon";
+        case ';': return "semicolon"; case '!': return "exclamation";
+        case '?': return "question mark"; case '-': return "dash";
+        case '_': return "underscore"; case '/': return "slash";
+        case '\\': return "backslash"; case '@': return "at";
+        case '#': return "hash"; case '&': return "and";
+        case '*': return "star"; case '+': return "plus";
+        case '=': return "equals"; case '(': return "left parenthesis";
+        case ')': return "right parenthesis"; case '[': return "left bracket";
+        case ']': return "right bracket"; case '"': return "quote";
+        case '\'': return "apostrophe"; default: return NULL;
+    }
+}
+
+static void remote_append_sequence_text(char *out, size_t capacity,
+                                        size_t *used, const char *value,
+                                        size_t length, bool character_mode)
+{
+    const char *replacement = length == 1 && character_mode
+        ? remote_character_name((unsigned char)value[0]) : NULL;
+    if (replacement) { value = replacement; length = strlen(replacement); }
+    if (*used && out[*used - 1] != ' ' && length
+        && value[0] != ' ' && *used + 1 < capacity)
+        out[(*used)++] = ' ';
+    if (length > capacity - *used - 1)
+        length = capacity - *used - 1;
+    memcpy(out + *used, value, length);
+    *used += length;
+    out[*used] = 0;
+}
+
+static bool remote_is_command_string(const char *value)
+{
+    while (*value && isspace((unsigned char)*value)) ++value;
+    static const char *const commands[] = {
+        "CharacterModeCommand", "LangChangeCommand", "PitchCommand",
+        "RateCommand", "VolumeCommand", "BreakCommand",
+        "EndUtteranceCommand", "IndexCommand", "CancellableSpeech",
+        "SpeechCommand", "BeepCommand", "WaveFileCommand",
+    };
+    for (size_t i = 0; i < sizeof(commands) / sizeof(commands[0]); ++i)
+        if (!strncmp(value, commands[i], strlen(commands[i])))
+            return true;
+    return *value == '{' && strstr(value, "Command")
+           && (strstr(value, "\"type\"") || strstr(value, "'type'"));
+}
+
+/* Preserve NVDA's character-mode intent and accept both the original
+   sequence form (literal strings plus command objects) and the newer
+   {type:"str", value:"..."} representation. */
+static char *remote_extract_speech(const char *json)
+{
+    const char *sequence = strstr(json, "\"sequence\"");
+    if (!sequence || !(sequence = strchr(sequence, '['))) return NULL;
+    const char *limit = strrchr(sequence, ']');
+    if (!limit) return NULL;
+    char *out = heap_caps_malloc(1024, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!out) return NULL;
+    size_t used = 0;
+    bool character_mode = false;
+    for (const char *p = sequence + 1; p < limit && used < 1023;) {
+        while (p < limit && (isspace((unsigned char)*p) || *p == ',')) ++p;
+        if (p >= limit) break;
+        if (*p == '"') {
+            char value[512]; const char *after = p + 1;
+            size_t length = remote_decode_json_string(
+                p, limit, value, sizeof(value), &after);
+            if (!remote_is_command_string(value))
+                remote_append_sequence_text(out, 1024, &used, value, length,
+                                            character_mode);
+            else
+                printf("REMOTE_COMMAND_STRING dropped=%.*s\n", 64, value);
+            p = after;
+            continue;
         }
+        if (*p == '{') {
+            const char *end = strchr(p, '}');
+            if (!end || end > limit) break;
+            size_t object_length = (size_t)(end - p + 1);
+            char object[512];
+            if (object_length >= sizeof(object)) object_length = sizeof(object)-1;
+            memcpy(object, p, object_length); object[object_length] = 0;
+            if (strstr(object, "CharacterModeCommand"))
+                character_mode = strstr(object, "\"state\": true")
+                              || strstr(object, "\"state\":true");
+            else if (strstr(object, "\"type\": \"str\"")
+                     || strstr(object, "\"type\":\"str\"")) {
+                const char *value_key = strstr(p, "\"value\"");
+                if (value_key && value_key < end) {
+                    const char *quote = strchr(value_key + 7, '"');
+                    if (quote && quote < end) {
+                        char value[512]; const char *after = quote + 1;
+                        size_t length = remote_decode_json_string(
+                            quote, end, value, sizeof(value), &after);
+                        remote_append_sequence_text(out, 1024, &used,
+                            value, length, character_mode);
+                    }
+                }
+            }
+            p = end + 1;
+            continue;
+        }
+        ++p;
     }
     while (used && (out[used-1] == ' ' || out[used-1] == '\n')) --used;
     out[used] = 0;
@@ -391,7 +512,7 @@ static bool tls_write_all(esp_tls_t *tls, const char *text)
         if (result > 0) sent += result;
         else if (result != ESP_TLS_ERR_SSL_WANT_READ
                  && result != ESP_TLS_ERR_SSL_WANT_WRITE) return false;
-        else vTaskDelay(pdMS_TO_TICKS(5));
+        else vTaskDelay(pdMS_TO_TICKS(1));
     }
     return sent == length;
 }
@@ -432,7 +553,7 @@ static void remote_network_task(void *arg)
         key);
     if (!tls_write_all(tls, join)) remote_stop = true;
     puts("REMOTE_CONNECT handshake_sent");
-    remote_queue_copy("NVDA remote connected");
+    remote_queue_copy("NVDA remote connected. Hold centre to leave.");
 
     char received[8192]; size_t have = 0;
     while (!remote_stop) {
@@ -440,7 +561,7 @@ static void remote_network_task(void *arg)
                                         sizeof(received) - have - 1);
         if (got == ESP_TLS_ERR_SSL_WANT_READ
             || got == ESP_TLS_ERR_SSL_WANT_WRITE) {
-            vTaskDelay(pdMS_TO_TICKS(5));
+            vTaskDelay(pdMS_TO_TICKS(1));
             continue;
         }
         if (got <= 0) break;
@@ -519,7 +640,8 @@ static void scan_buttons(void *arg)
 
 void app_main(void)
 {
-    if (REG_READ(RTC_CNTL_STORE0_REG) == BOOT_REQUEST_READER) {
+    uint32_t boot_request = REG_READ(RTC_CNTL_STORE0_REG);
+    if (boot_request == BOOT_REQUEST_READER) {
         REG_WRITE(RTC_CNTL_STORE0_REG, 0);
         const esp_partition_t *reader = esp_partition_find_first(
             ESP_PARTITION_TYPE_APP,
@@ -527,6 +649,20 @@ void app_main(void)
         esp_err_t result = reader
             ? esp_ota_set_boot_partition(reader) : ESP_ERR_NOT_FOUND;
         printf("READER_BOOT_SELECT result=%s\n", esp_err_to_name(result));
+        if (result == ESP_OK)
+            esp_restart();
+    } else if (boot_request == BOOT_REQUEST_TRANSFER) {
+        /* Consume the one-shot request.  If this network application later
+           resets or loses power, its next boot has no request and returns to
+           the reader instead of trapping the user in NVDA/file transfer. */
+        REG_WRITE(RTC_CNTL_STORE0_REG, 0);
+    } else {
+        const esp_partition_t *reader = esp_partition_find_first(
+            ESP_PARTITION_TYPE_APP,
+            ESP_PARTITION_SUBTYPE_APP_FACTORY, "reader");
+        esp_err_t result = reader
+            ? esp_ota_set_boot_partition(reader) : ESP_ERR_NOT_FOUND;
+        printf("NETWORK_RESET_RETURN result=%s\n", esp_err_to_name(result));
         if (result == ESP_OK)
             esp_restart();
     }
@@ -628,8 +764,14 @@ void app_main(void)
         ESP_ERROR_CHECK(created == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
         transfer_ready = true;
         for (;;) {
+            remote_speech_t item;
+            if (xQueueReceive(remote_speech, &item, pdMS_TO_TICKS(1))
+                    == pdTRUE) {
+                speak(voice, item.text);
+                free(item.text);
+            }
             int key;
-            if (xQueueReceive(presses, &key, pdMS_TO_TICKS(10)) == pdTRUE) {
+            if (xQueueReceive(presses, &key, 0) == pdTRUE) {
                 transfer_ready = false;
                 remote_stop = true;
                 remote_cancel = true;
@@ -644,11 +786,6 @@ void app_main(void)
                 REG_WRITE(RTC_CNTL_STORE1_REG, 0);
                 REG_WRITE(RTC_CNTL_STORE0_REG, BOOT_REQUEST_READER);
                 esp_restart();
-            }
-            remote_speech_t item;
-            if (xQueueReceive(remote_speech, &item, 0) == pdTRUE) {
-                speak(voice, item.text);
-                free(item.text);
             }
         }
     }

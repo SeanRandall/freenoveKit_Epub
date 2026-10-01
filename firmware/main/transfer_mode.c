@@ -19,11 +19,14 @@
 #include "esp_mac.h"
 #include "esp_netif.h"
 #include "esp_sntp.h"
+#include "esp_timer.h"
 #include "esp_vfs_fat.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "mdns.h"
+#include "lwip/sockets.h"
+#include "lwip/tcp.h"
 #include "sdmmc_cmd.h"
 
 #define CARD_ROOT "/sdcard"
@@ -216,10 +219,13 @@ static esp_err_t send_item(httpd_req_t *req, const char *disk_path,
 
 static esp_err_t propfind_handler(httpd_req_t *req, const char *path)
 {
+    int64_t started = esp_timer_get_time();
+    unsigned item_count = 1;
     struct stat st;
     char depth[8] = "0";
     httpd_req_get_hdr_value_str(req, "Depth", depth, sizeof(depth));
     if (stat(path, &st) != 0) {
+        ESP_LOGI(TAG, "PROPFIND_MISS uri=%s", req->uri);
         httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Not found");
         return ESP_OK;
     }
@@ -278,18 +284,26 @@ static esp_err_t propfind_handler(httpd_req_t *req, const char *path)
                 if (uri_slash) child_uri[uri_len++] = '/';
                 memcpy(child_uri + uri_len, item->text, name_len + 1);
                 send_item(req, child, child_uri);
+                ++item_count;
                 free(item);
             }
         }
     }
     httpd_resp_send_chunk(req, "</D:multistatus>", HTTPD_RESP_USE_STRLEN);
-    return httpd_resp_send_chunk(req, NULL, 0);
+    esp_err_t result = httpd_resp_send_chunk(req, NULL, 0);
+    ESP_LOGI(TAG, "PROPFIND uri=%s depth=%s items=%u elapsed_ms=%lld result=%s",
+             req->uri, depth, item_count,
+             (long long)((esp_timer_get_time() - started) / 1000),
+             esp_err_to_name(result));
+    return result;
 }
 
 static esp_err_t get_handler(httpd_req_t *req, const char *path, bool head)
 {
+    int64_t started = esp_timer_get_time();
     struct stat st;
     if (stat(path, &st) != 0 || S_ISDIR(st.st_mode)) {
+        ESP_LOGI(TAG, "%s_MISS uri=%s", head ? "HEAD" : "GET", req->uri);
         httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Not a file");
         return ESP_OK;
     }
@@ -304,33 +318,51 @@ static esp_err_t get_handler(httpd_req_t *req, const char *path, bool head)
             && httpd_send(req, response, response_len) == response_len
             ? ESP_OK : ESP_FAIL;
     }
-    httpd_resp_set_type(req, "application/octet-stream");
     FILE *file = fopen(path, "rb");
     if (!file)
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
                                    "Cannot open file");
-    char *buffer = malloc(8192);
+    char response[192];
+    int response_len = snprintf(response, sizeof(response),
+        "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n"
+        "Content-Length: %s\r\n\r\n", length);
+    if (response_len <= 0 || response_len >= (int)sizeof(response)
+        || httpd_send(req, response, response_len) != response_len) {
+        fclose(file);
+        return ESP_FAIL;
+    }
+    char *buffer = malloc(16384);
     if (!buffer) {
         fclose(file);
         return ESP_ERR_NO_MEM;
     }
     size_t count;
     esp_err_t result = ESP_OK;
-    while ((count = fread(buffer, 1, 8192, file)) > 0) {
-        if (httpd_resp_send_chunk(req, buffer, count) != ESP_OK) {
-            result = ESP_FAIL;
-            break;
+    size_t sent_total = 0;
+    while ((count = fread(buffer, 1, 16384, file)) > 0) {
+        size_t sent = 0;
+        while (sent < count) {
+            int amount = httpd_send(req, buffer + sent, count - sent);
+            if (amount <= 0) { result = ESP_FAIL; break; }
+            sent += (size_t)amount;
+            sent_total += (size_t)amount;
         }
+        if (result != ESP_OK) break;
     }
     free(buffer);
     fclose(file);
-    if (result == ESP_OK)
-        result = httpd_resp_send_chunk(req, NULL, 0);
+    int64_t elapsed = (esp_timer_get_time() - started) / 1000;
+    ESP_LOGI(TAG, "GET uri=%s bytes=%u elapsed_ms=%lld rate_kib_s=%lld result=%s",
+             req->uri, (unsigned)sent_total, (long long)elapsed,
+             elapsed ? (long long)(sent_total * 1000 / elapsed / 1024) : 0,
+             esp_err_to_name(result));
     return result;
 }
 
 static esp_err_t put_handler(httpd_req_t *req, const char *path)
 {
+    int64_t started = esp_timer_get_time();
+    int original_length = req->content_len;
     struct stat old;
     bool replacing = stat(path, &old) == 0;
     char temporary[MAX_PATH_LEN + 16];
@@ -372,11 +404,24 @@ static esp_err_t put_handler(httpd_req_t *req, const char *path)
                                    "Cannot finish upload");
     }
     httpd_resp_set_status(req, replacing ? "204 No Content" : "201 Created");
+    int64_t elapsed = (esp_timer_get_time() - started) / 1000;
+    ESP_LOGI(TAG, "PUT uri=%s bytes=%d elapsed_ms=%lld rate_kib_s=%lld",
+             req->uri, original_length, (long long)elapsed,
+             elapsed ? (long long)((int64_t)original_length * 1000
+                                    / elapsed / 1024) : 0);
     return httpd_resp_send(req, NULL, 0);
 }
 
 static esp_err_t webdav_handler(httpd_req_t *req)
 {
+    /* Explorer issues a series of small PROPFIND responses.  Nagle plus its
+       delayed ACK policy can otherwise add hundreds of milliseconds to
+       every XML chunk, making a directory appear to hang. */
+    int no_delay = 1;
+    int socket = httpd_req_to_sockfd(req);
+    if (socket >= 0 && req->method == HTTP_PROPFIND)
+        (void)setsockopt(socket, IPPROTO_TCP, TCP_NODELAY,
+                         &no_delay, sizeof(no_delay));
     char path[MAX_PATH_LEN];
     if (!decode_path(req->uri, path, sizeof(path)))
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Bad path");
@@ -521,6 +566,10 @@ static esp_err_t transfer_mode_start_internal(const char *fallback_ssid,
     ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_STA, &config), TAG,
                         "station config");
     ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "Wi-Fi start");
+    /* Network modes run while USB-powered.  Modem sleep saves no useful
+       battery here and adds latency to Explorer transfers and remote speech. */
+    ESP_RETURN_ON_ERROR(esp_wifi_set_ps(WIFI_PS_NONE), TAG,
+                        "disable Wi-Fi power saving");
     EventBits_t bits = xEventGroupWaitBits(wifi_events,
         WIFI_READY | WIFI_FAILED, pdFALSE, pdFALSE, pdMS_TO_TICKS(30000));
     ESP_RETURN_ON_FALSE(bits & WIFI_READY, ESP_ERR_TIMEOUT, TAG,
@@ -565,6 +614,17 @@ static esp_err_t transfer_mode_start_internal(const char *fallback_ssid,
     httpd_config_t http = HTTPD_DEFAULT_CONFIG();
     http.uri_match_fn = httpd_uri_match_wildcard;
     http.max_uri_handlers = 4;
+    /* Windows WebClient opens several parallel DAV sessions and can retain
+       dead ones for roughly a minute.  Reclaim the least-recently-used
+       session instead of refusing a new Explorer request. */
+    http.lru_purge_enable = true;
+    http.max_open_sockets = 7;
+    http.recv_wait_timeout = 2;
+    http.send_wait_timeout = 2;
+    http.keep_alive_enable = true;
+    http.keep_alive_idle = 15;
+    http.keep_alive_interval = 5;
+    http.keep_alive_count = 2;
     /* Explorer's WebClient sends substantially larger DAV request headers
        than curl.  URI decoding, Depth: 1 enumeration and ESP-IDF's header
        parser can otherwise exhaust the default/8 KiB httpd task stack. */
