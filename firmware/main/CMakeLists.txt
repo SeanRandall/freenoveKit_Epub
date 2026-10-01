@@ -1,6 +1,12 @@
 set(OPENEVV "${CMAKE_CURRENT_LIST_DIR}/../../vendor/openevv-perf")
 set(EVV_APP_SOURCE "paragraph_reader_stable_main.c" CACHE STRING
     "Firmware entry point; use button_speech_main.c for the keypad demo")
+set(EVV_LANGUAGE "enus" CACHE STRING
+    "OpenEVV language module to compile (for example enus, engb or frfr)")
+
+if(NOT EXISTS "${OPENEVV}/lang/${EVV_LANGUAGE}/delta_lang_${EVV_LANGUAGE}.c")
+    message(FATAL_ERROR "Unknown OpenEVV language '${EVV_LANGUAGE}'")
+endif()
 
 if(MINIMAL_BOOT)
     idf_component_register(SRCS "minimal_main.c")
@@ -11,12 +17,27 @@ file(GLOB ENGINE_SOURCES "${OPENEVV}/src/*.c")
 list(REMOVE_ITEM ENGINE_SOURCES "${OPENEVV}/src/port_win32.c")
 list(REMOVE_ITEM ENGINE_SOURCES "${OPENEVV}/src/port_posix.c")
 
-file(GLOB LANGUAGE_SOURCES "${OPENEVV}/lang/enus/*.c")
+file(GLOB LANGUAGE_SOURCES "${OPENEVV}/lang/${EVV_LANGUAGE}/*.c")
 file(GLOB COMPILED_RULE_SOURCES
-    "${OPENEVV}/lang/enus/delta_rules_c[0-9][0-9]_enus.c")
+    "${OPENEVV}/lang/${EVV_LANGUAGE}/delta_rules_c[0-9][0-9]_${EVV_LANGUAGE}.c")
 list(REMOVE_ITEM LANGUAGE_SOURCES
-    "${OPENEVV}/lang/enus/delta_rules_none_enus.c")
+    "${OPENEVV}/lang/${EVV_LANGUAGE}/delta_rules_none_${EVV_LANGUAGE}.c")
 list(REMOVE_ITEM LANGUAGE_SOURCES ${COMPILED_RULE_SOURCES})
+
+if(NOT COMPILED_RULE_SOURCES)
+    message(FATAL_ERROR
+        "Compiled rules for '${EVV_LANGUAGE}' are missing. Run "
+        "make EVVLANG=lang/${EVV_LANGUAGE} rules in vendor/openevv-perf first.")
+endif()
+
+set(LANGUAGE_BINDING_SOURCE
+    "${CMAKE_CURRENT_BINARY_DIR}/delta_langs_${EVV_LANGUAGE}.c")
+file(WRITE "${LANGUAGE_BINDING_SOURCE}"
+"#include \"delta_lang.h\"\n"
+"extern delta_language delta_lang_${EVV_LANGUAGE};\n"
+"void delta_lang_bind_${EVV_LANGUAGE}(void);\n"
+"const delta_language *const delta_languages[] = { &delta_lang_${EVV_LANGUAGE}, 0 };\n"
+"void delta_lang_bind_all(void) { delta_lang_bind_${EVV_LANGUAGE}(); }\n")
 
 set(APP_REQUIREMENTS
     esp_timer esp_psram esp_driver_i2s esp_adc nvs_flash esp_wifi
@@ -29,14 +50,14 @@ idf_component_register(
         "${EVV_APP_SOURCE}"
         "transfer_mode.c"
         "epub_text.c"
-        "delta_langs_enus.c"
+        "${LANGUAGE_BINDING_SOURCE}"
         "port_esp.c"
         ${ENGINE_SOURCES}
         ${LANGUAGE_SOURCES}
         ${COMPILED_RULE_SOURCES}
     INCLUDE_DIRS
         "${OPENEVV}/src"
-        "${OPENEVV}/lang/enus"
+        "${OPENEVV}/lang/${EVV_LANGUAGE}"
     REQUIRES ${APP_REQUIREMENTS}
     EMBED_FILES
         "../tones/UI.wav"
