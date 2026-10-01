@@ -1,8 +1,75 @@
 from pathlib import Path
+from html import escape
+import re
 from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile
 
 root = Path(__file__).resolve().parents[1]
 output = root / "sd-card" / "EVV Reader Guide.epub"
+physical_description = root / "Hardware physical description.md"
+
+
+def inline_markdown(text: str) -> str:
+    """Convert the small inline Markdown subset used by the description."""
+    text = text.replace("**", "")
+    parts = []
+    position = 0
+    for match in re.finditer(r"\[([^]]+)\]\(([^)]+)\)", text):
+        parts.append(escape(text[position:match.start()]))
+        parts.append(
+            f'<a href="{escape(match.group(2), quote=True)}">'
+            f'{escape(match.group(1))}</a>'
+        )
+        position = match.end()
+    parts.append(escape(text[position:]))
+    return "".join(parts)
+
+
+def markdown_body(markdown: str) -> str:
+    """Make accessible XHTML from the deliberately simple source document."""
+    output_lines = []
+    paragraph = []
+    in_list = False
+
+    def close_paragraph() -> None:
+        if paragraph:
+            output_lines.append(f"<p>{inline_markdown(' '.join(paragraph))}</p>")
+            paragraph.clear()
+
+    def close_list() -> None:
+        nonlocal in_list
+        if in_list:
+            output_lines.append("</ul>")
+            in_list = False
+
+    for raw_line in markdown.replace("\u00a0", " ").splitlines():
+        line = raw_line.strip()
+        if not line:
+            close_paragraph()
+            close_list()
+            continue
+        heading = re.match(r"^(#{1,6})\s+(.+)$", line)
+        if heading:
+            close_paragraph()
+            close_list()
+            level = min(len(heading.group(1)), 3)
+            output_lines.append(
+                f"<h{level}>{inline_markdown(heading.group(2))}</h{level}>"
+            )
+            continue
+        bullet = re.match(r"^(?:\\?\*)\s+(.+)$", line)
+        if bullet:
+            close_paragraph()
+            if not in_list:
+                output_lines.append("<ul>")
+                in_list = True
+            output_lines.append(f"<li>{inline_markdown(bullet.group(1))}</li>")
+            continue
+        close_list()
+        paragraph.append(line)
+
+    close_paragraph()
+    close_list()
+    return "\n".join(output_lines)
 
 mimetype = "application/epub+zip"
 container = """<?xml version="1.0" encoding="UTF-8"?>
@@ -17,10 +84,13 @@ package = """<?xml version="1.0" encoding="UTF-8"?>
     <dc:title>EVV Reader Guide</dc:title>
     <dc:language>en-GB</dc:language>
     <dc:creator>EVVZero contributors</dc:creator>
-    <meta property="dcterms:modified">2026-09-29T00:00:00Z</meta>
+    <meta property="dcterms:modified">2026-10-01T00:00:00Z</meta>
   </metadata>
-  <manifest><item id="guide" href="guide.xhtml" media-type="application/xhtml+xml"/></manifest>
-  <spine><itemref idref="guide"/></spine>
+  <manifest>
+    <item id="guide" href="guide.xhtml" media-type="application/xhtml+xml"/>
+    <item id="physical" href="physical.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="guide"/><itemref idref="physical"/></spine>
 </package>
 """
 guide = """<?xml version="1.0" encoding="UTF-8"?>
@@ -52,11 +122,20 @@ guide = """<?xml version="1.0" encoding="UTF-8"?>
 </body></html>
 """
 
+physical = f"""<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en-GB">
+<head><title>Freenove kit physical overview</title></head>
+<body>
+{markdown_body(physical_description.read_text(encoding="utf-8-sig"))}
+</body></html>
+"""
+
 output.parent.mkdir(parents=True, exist_ok=True)
 with ZipFile(output, "w") as book:
     book.writestr("mimetype", mimetype, compress_type=ZIP_STORED)
     book.writestr("META-INF/container.xml", container, compress_type=ZIP_DEFLATED)
     book.writestr("OEBPS/content.opf", package, compress_type=ZIP_DEFLATED)
     book.writestr("OEBPS/guide.xhtml", guide, compress_type=ZIP_DEFLATED)
+    book.writestr("OEBPS/physical.xhtml", physical, compress_type=ZIP_DEFLATED)
 
 print(output)
