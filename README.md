@@ -10,6 +10,26 @@ This repository is for both alpha testers and developers. It contains:
 - an SD-card template and spoken EPUB guide;
 - the complete editable firmware and modified OpenEVV source.
 
+## Required hardware
+
+This firmware targets the **1.14-inch Freenove Media Kit for ESP32-S3**, model
+`FNK0102A`. It is not intended for Freenove's larger-screen media kits.
+
+- [Buy directly from Freenove](https://store.freenove.com/products/fnk0102)
+- Amazon: [United Kingdom](https://www.amazon.co.uk/s?k=Freenove+FNK0102A),
+  [United States](https://www.amazon.com/s?k=Freenove+FNK0102A),
+  [Germany](https://www.amazon.de/s?k=Freenove+FNK0102A),
+  [Canada](https://www.amazon.ca/s?k=Freenove+FNK0102A),
+  [France](https://www.amazon.fr/s?k=Freenove+FNK0102A),
+  [Italy](https://www.amazon.it/s?k=Freenove+FNK0102A),
+  [Spain](https://www.amazon.es/s?k=Freenove+FNK0102A),
+  [Australia](https://www.amazon.com.au/s?k=Freenove+FNK0102A),
+  [Japan](https://www.amazon.co.jp/s?k=Freenove+FNK0102A), and
+  [Mexico](https://www.amazon.com.mx/s?k=Freenove+FNK0102A).
+
+Amazon availability and delivery regions vary. Check that the selected kit is
+the 1.14-inch `FNK0102A` model before ordering.
+
 ## Important alpha warning
 
 This is unfinished test firmware. It may crash, lose a reading position or
