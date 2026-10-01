@@ -1,11 +1,11 @@
 # EVV Reader for the Freenove Media Kit
 
-Experimental speech-first EPUB reader firmware for the **Freenove Media Kit
-for ESP32-S3, 1.14-inch model with 16 MB flash**.
+Experimental Eloquence-sounding EPUB reader firmware for the **Freenove Media Kit
+for ESP32-S3, 1.14-inch model **.
 
 This repository is for both alpha testers and developers. It contains:
 
-- a Windows installer that does not require Python or ESP-IDF;
+- a Windows installer;
 - complete US English, British English and French firmware images;
 - an SD-card template and spoken EPUB guide;
 - the complete editable firmware and modified OpenEVV source.
@@ -28,42 +28,16 @@ This firmware targets the **1.14-inch Freenove Media Kit for ESP32-S3**, model
   [Mexico](https://www.amazon.com.mx/s?k=Freenove+FNK0102A).
 
 Amazon availability and delivery regions vary. Check that the selected kit is
-the 1.14-inch `FNK0102A` model before ordering.
+the 1.14-inch `FNK0102A` model before ordering. The larger screen model will work with modifications, but not using the installer for users at the moment.
 
 ## Important alpha warning
 
-This is unfinished test firmware. It may crash, lose a reading position or
-damage a file if power is removed while the SD card is being written. Keep a
-separate copy of every book and recording.
+This is unfinished test firmware. It will crash, lose a reading position or
+damage a file while the SD card is being read or written. Keep a
+separate copy of every book. 
 
 File transfer currently has no authentication. Use it only on a trusted local
-network. Treat Wi-Fi passwords and NVDA Remote channel keys as secrets.
-
-## Install the firmware on Windows
-
-Download these two files from the `release` directory:
-
-1. `EVV-Reader-Installer.exe`
-2. One firmware image:
-   - `freenoveKit_Epub-en-US.bin` — US English voice and English interface
-   - `freenoveKit_Epub-en-GB.bin` — British English voice and English interface
-   - `freenoveKit_Epub-fr-FR.bin` — French voice with an **English interface**
-
-The French firmware speaks book text in French, but its menus and fixed status
-messages have not yet been translated.
-
-Connect the kit using its exposed USB-UART socket, then run
-`EVV-Reader-Installer.exe`. Choose the downloaded `.bin` in the standard
-Windows file-open dialog and confirm the detected COM port. Leave the device
-connected until the installer reports that flashing has finished.
-
-Python and ESP-IDF are not required. If several USB serial devices are
-connected, disconnect the unrelated devices before starting. If installation
-cannot connect, hold **BOOT**, briefly press **RESET**, release **BOOT**, and
-try again.
-
-Flashing replaces the firmware in internal flash. It does not erase books or
-configuration stored on the SD card.
+network. 
 
 ## Prepare the SD card
 
@@ -84,6 +58,34 @@ Network features are optional. To configure them:
 
 No real Wi-Fi credentials or NVDA Remote settings are included in this
 repository or its public firmware images.
+
+
+
+## Install the firmware on Windows
+
+Download these two files from the `release` directory:
+
+1. `EVV-Reader-Installer.exe`
+2. One firmware image:
+   - `freenoveKit_Epub-en-US.bin` — US English voice and English interface
+   - `freenoveKit_Epub-en-GB.bin` — British English voice and English interface
+   - `freenoveKit_Epub-fr-FR.bin` — French voice with an **English interface**
+
+The French firmware speaks book text in French, but its menus and fixed status
+messages have not yet been translated.
+
+Connect the kit via USB, then run
+`EVV-Reader-Installer.exe`. Choose the downloaded `.bin` in the standard
+Windows file-open dialog and confirm the detected COM port. Leave the device
+connected until the installer reports that flashing has finished.
+
+If several USB serial devices are
+connected, disconnect the unrelated devices before starting. If installation
+cannot connect, hold **BOOT**, briefly press **RESET**, release **BOOT**, and
+try again.
+
+Flashing replaces the firmware in internal flash. It does not erase content or
+configuration stored on the SD card.
 
 ## Command-line installation
 
@@ -132,12 +134,9 @@ idf.py -B build-transfer -D EVV_APP_SOURCE=webdav_transfer_main.c `
   -D TRANSFER_WIFI_SSID= -D TRANSFER_WIFI_PASSWORD= build
 ```
 
-Never embed real credentials in a public binary.
 
 The OpenEVV tree under `vendor/openevv-perf` includes the ESP32-specific
-changes required by this firmware. It is vendored deliberately so testers can
-inspect and modify the speech engine rather than relying on an unpublished
-binary.
+changes required by this firmware. It is separated deliberately; eventually we'll add firmware with different synthesizers, as we do with different languages. 
 
 The project firmware is MIT licensed. Vendored OpenEVV files retain their own
 MIT licence and notices.
