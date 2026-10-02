@@ -54,8 +54,13 @@ void evv_port_start(void);
 #define VOICE_SPEED 6
 #define VOICE_VOLUME 7
 #define ENGINE_VOLUME_MAX 80
-#define REMOTE_PCM_SAMPLES 65536
-#define REMOTE_PLAY_SAMPLES 1024
+#define REMOTE_SILENCE_SAMPLES 128
+#define REMOTE_FIFO_SAMPLES 16384
+#define REMOTE_PREFILL_CHARACTER_SAMPLES 512
+#define REMOTE_PREFILL_SHORT_SAMPLES 1536
+#define REMOTE_PREFILL_SENTENCE_SAMPLES 4096
+#define REMOTE_PREFILL_LONG_SAMPLES 8192
+#define REMOTE_PREFILL_PASSAGE_SAMPLES 12288
 static int16_t *mono;
 static int16_t *stereo;
 static i2s_chan_handle_t audio;
@@ -69,16 +74,18 @@ static QueueHandle_t remote_speech;
 static int saved_rate = 105;
 static int saved_volume = 20;
 static bool is_remote_mode;
-static int16_t *remote_pcm;
-static SemaphoreHandle_t remote_pcm_mutex;
-static volatile bool remote_pcm_session;
-static volatile bool remote_pcm_started;
-static volatile bool remote_pcm_synthesis_done;
-static size_t remote_pcm_read;
-static size_t remote_pcm_write;
-static size_t remote_pcm_count;
-static size_t remote_pcm_prefill;
-static unsigned remote_pcm_underflows;
+static SemaphoreHandle_t remote_i2s_mutex;
+static int16_t *remote_fifo;
+static size_t remote_fifo_read;
+static size_t remote_fifo_write;
+static size_t remote_fifo_count;
+static size_t remote_fifo_maximum;
+static size_t remote_fifo_prefill = REMOTE_PREFILL_SHORT_SAMPLES;
+static bool remote_fifo_ready;
+static volatile bool remote_stream_active;
+static unsigned remote_stream_writes;
+static unsigned remote_silence_writes;
+static unsigned remote_fifo_underflows;
 
 typedef struct {
     char *text;
@@ -96,29 +103,34 @@ static enum ECICallbackReturn STDCALL waveform(OldInst *voice,
     if (message != eciWaveformBuffer) return eciDataProcessed;
     size_t count = (size_t)parameter;
     if (remote_cancel) return eciDataAbort;
-    if (is_remote_mode && remote_pcm_mutex) {
+    if (is_remote_mode && remote_i2s_mutex) {
         size_t offset = 0;
+        remote_stream_active = true;
         while (offset < count && !remote_cancel) {
-            xSemaphoreTake(remote_pcm_mutex, portMAX_DELAY);
-            size_t space = REMOTE_PCM_SAMPLES - remote_pcm_count;
+            xSemaphoreTake(remote_i2s_mutex, portMAX_DELAY);
+            size_t space = REMOTE_FIFO_SAMPLES - remote_fifo_count;
             size_t copy = count - offset;
             if (copy > space) copy = space;
-            size_t tail = REMOTE_PCM_SAMPLES - remote_pcm_write;
+            size_t tail = REMOTE_FIFO_SAMPLES - remote_fifo_write;
             if (copy > tail) copy = tail;
             for (size_t i = 0; i < copy; ++i)
-                remote_pcm[remote_pcm_write + i] =
-                    (int16_t)(((int32_t)mono[offset + i]
-                               * saved_volume) / 100);
-            remote_pcm_write = (remote_pcm_write + copy)
-                               % REMOTE_PCM_SAMPLES;
-            remote_pcm_count += copy;
-            if (!remote_pcm_started
-                && remote_pcm_count >= remote_pcm_prefill)
-                remote_pcm_started = true;
-            xSemaphoreGive(remote_pcm_mutex);
+                remote_fifo[remote_fifo_write + i] =
+                    (int16_t)(((int32_t)mono[offset + i] * saved_volume)
+                              / 100);
+            remote_fifo_write = (remote_fifo_write + copy)
+                                % REMOTE_FIFO_SAMPLES;
+            remote_fifo_count += copy;
+            if (remote_fifo_count > remote_fifo_maximum)
+                remote_fifo_maximum = remote_fifo_count;
+            if (!remote_fifo_ready
+                && remote_fifo_count >= remote_fifo_prefill)
+                remote_fifo_ready = true;
+            xSemaphoreGive(remote_i2s_mutex);
             offset += copy;
-            if (!copy) vTaskDelay(pdMS_TO_TICKS(1));
+            if (!copy)
+                vTaskDelay(pdMS_TO_TICKS(1));
         }
+        ++remote_stream_writes;
         return remote_cancel ? eciDataAbort : eciDataProcessed;
     }
     for (size_t i = 0; i < count; ++i) {
@@ -131,98 +143,69 @@ static enum ECICallbackReturn STDCALL waveform(OldInst *voice,
         ? eciDataProcessed : eciDataAbort;
 }
 
-static void remote_pcm_begin(size_t text_length)
-{
-    (void)text_length;
-    xSemaphoreTake(remote_pcm_mutex, portMAX_DELAY);
-    remote_pcm_read = remote_pcm_write = remote_pcm_count = 0;
-    remote_pcm_synthesis_done = false;
-    remote_pcm_started = false;
-    /* OpenEVV produces PCM faster than playback on this board.  Start with
-       its first sample instead of imposing a sentence-sized latency tax. */
-    remote_pcm_prefill = 1;
-    remote_pcm_session = true;
-    xSemaphoreGive(remote_pcm_mutex);
-}
-
-static void remote_pcm_cancel(void)
-{
-    if (!remote_pcm_mutex) return;
-    xSemaphoreTake(remote_pcm_mutex, portMAX_DELAY);
-    remote_pcm_read = remote_pcm_write = remote_pcm_count = 0;
-    remote_pcm_synthesis_done = true;
-    remote_pcm_started = true;
-    remote_pcm_session = false;
-    xSemaphoreGive(remote_pcm_mutex);
-}
-
 static void remote_playback_task(void *arg)
 {
     (void)arg;
-    int16_t local[REMOTE_PLAY_SAMPLES];
-    static const int16_t silence[FRAME_SAMPLES * 2];
+    int16_t local[REMOTE_SILENCE_SAMPLES];
+    static const int16_t silence[REMOTE_SILENCE_SAMPLES * 2];
     size_t preloaded = 0;
-    bool silence_queued = true;
     /* The TX descriptors are circular.  Populate them with silence before
        enabling the channel so an empty remote queue can never expose stale
        RAM or repeat audio from the preceding announcement. */
     (void)i2s_channel_preload_data(audio, silence, sizeof(silence),
                                    &preloaded);
     ESP_ERROR_CHECK(i2s_channel_enable(audio));
-    printf("REMOTE_PCM i2s_silence_preloaded=%u\n", (unsigned)preloaded);
+    printf("REMOTE_STREAM i2s_silence_preloaded=%u frame_samples=%u\n",
+           (unsigned)preloaded, (unsigned)REMOTE_SILENCE_SAMPLES);
     for (;;) {
         size_t take = 0;
-        bool session, started, done;
-        xSemaphoreTake(remote_pcm_mutex, portMAX_DELAY);
-        session = remote_pcm_session;
-        started = remote_pcm_started;
-        done = remote_pcm_synthesis_done;
-        if (session && !started && done) {
-            remote_pcm_started = started = true;
-        }
-        if (session && started && remote_pcm_count) {
-            take = remote_pcm_count;
-            if (take > REMOTE_PLAY_SAMPLES) take = REMOTE_PLAY_SAMPLES;
-            size_t tail = REMOTE_PCM_SAMPLES - remote_pcm_read;
+        bool underflow = false;
+        xSemaphoreTake(remote_i2s_mutex, portMAX_DELAY);
+        if (remote_fifo_ready && remote_fifo_count) {
+            take = remote_fifo_count;
+            if (take > REMOTE_SILENCE_SAMPLES)
+                take = REMOTE_SILENCE_SAMPLES;
+            size_t tail = REMOTE_FIFO_SAMPLES - remote_fifo_read;
             if (take > tail) take = tail;
-            memcpy(local, remote_pcm + remote_pcm_read,
+            memcpy(local, remote_fifo + remote_fifo_read,
                    take * sizeof(*local));
-            remote_pcm_read = (remote_pcm_read + take)
-                              % REMOTE_PCM_SAMPLES;
-            remote_pcm_count -= take;
-        } else if (session && started && done && !remote_pcm_count) {
-            remote_pcm_session = false;
-            session = false;
-        } else if (session && started && !done && !remote_pcm_count) {
-            ++remote_pcm_underflows;
-            remote_pcm_started = started = false;
-            remote_pcm_prefill = 1;
+            remote_fifo_read = (remote_fifo_read + take)
+                               % REMOTE_FIFO_SAMPLES;
+            remote_fifo_count -= take;
+            if (remote_fifo_count == 0 && take < REMOTE_SILENCE_SAMPLES) {
+                remote_fifo_ready = false;
+                underflow = remote_stream_active;
+            }
+        } else if (remote_fifo_ready && !remote_fifo_count) {
+            remote_fifo_ready = false;
+            underflow = remote_stream_active;
         }
-        xSemaphoreGive(remote_pcm_mutex);
-        if (take) {
-            for (size_t i = 0; i < take; ++i)
-                stereo[i * 2] = stereo[i * 2 + 1] = local[i];
-            size_t written = 0;
-            if (i2s_channel_write(audio, stereo, take * 4, &written,
-                                  portMAX_DELAY) != ESP_OK
-                || written != take * 4)
-                puts("REMOTE_PCM i2s_write_failed");
-            silence_queued = false;
-        } else if (!silence_queued) {
-            /* Once queued speech drains, overwrite the repeating DMA ring
-               with silence.  New PCM can follow it without disabling I2S,
-               avoiding clicks and repeated final phonemes between network
-               messages or synthesis bursts. */
-            size_t written = 0;
-            esp_err_t result = i2s_channel_write(
-                audio, silence, sizeof(silence), &written, portMAX_DELAY);
-            printf("REMOTE_PCM silence_inserted bytes=%u result=%s\n",
+        if (underflow)
+            ++remote_fifo_underflows;
+        xSemaphoreGive(remote_i2s_mutex);
+
+        for (size_t i = 0; i < REMOTE_SILENCE_SAMPLES; ++i) {
+            int16_t sample = i < take ? local[i] : 0;
+            stereo[i * 2] = stereo[i * 2 + 1] = sample;
+        }
+        size_t written = 0;
+        esp_err_t result = i2s_channel_write(
+            audio, stereo, sizeof(silence), &written, portMAX_DELAY);
+        if (result != ESP_OK || written != sizeof(silence))
+            printf("REMOTE_STREAM output_failed written=%u result=%s\n",
                    (unsigned)written, esp_err_to_name(result));
-            silence_queued = result == ESP_OK && written == sizeof(silence);
-        } else {
-            vTaskDelay(pdMS_TO_TICKS(1));
-        }
+        else if (!take)
+            ++remote_silence_writes;
     }
+}
+
+static void remote_fifo_clear(void)
+{
+    if (!remote_i2s_mutex) return;
+    xSemaphoreTake(remote_i2s_mutex, portMAX_DELAY);
+    remote_fifo_read = remote_fifo_write = remote_fifo_count = 0;
+    remote_fifo_ready = false;
+    xSemaphoreGive(remote_i2s_mutex);
 }
 
 static void speak(OldInst *voice, const char *text)
@@ -233,8 +216,25 @@ static void speak(OldInst *voice, const char *text)
        the same announcement.  In particular, Wi-Fi startup can disturb an
        event queued by the ADC task before transfer mode is ready. */
     if (!is_remote_mode) xQueueReset(presses);
-    if (is_remote_mode) remote_pcm_begin(strlen(text));
-    else i2s_channel_enable(audio);
+    if (!is_remote_mode) i2s_channel_enable(audio);
+    else {
+        size_t text_length = strlen(text);
+        size_t prefill = REMOTE_PREFILL_PASSAGE_SAMPLES;
+        if (text_length <= 12)
+            prefill = REMOTE_PREFILL_CHARACTER_SAMPLES;
+        else if (text_length <= 40)
+            prefill = REMOTE_PREFILL_SHORT_SAMPLES;
+        else if (text_length <= 120)
+            prefill = REMOTE_PREFILL_SENTENCE_SAMPLES;
+        else if (text_length <= 300)
+            prefill = REMOTE_PREFILL_LONG_SAMPLES;
+        xSemaphoreTake(remote_i2s_mutex, portMAX_DELAY);
+        remote_fifo_prefill = prefill;
+        remote_fifo_maximum = remote_fifo_count;
+        xSemaphoreGive(remote_i2s_mutex);
+        remote_stream_active = true;
+    }
+    TickType_t speech_started = xTaskGetTickCount();
     if (et_addText(voice, text) && et_synthesize(voice)) {
         TickType_t limit = xTaskGetTickCount() + pdMS_TO_TICKS(12000);
         while (eo_speaking(voice) && xTaskGetTickCount() < limit)
@@ -242,17 +242,24 @@ static void speak(OldInst *voice, const char *text)
         eo_synchronizeSynth(voice);
     }
     if (is_remote_mode) {
-        xSemaphoreTake(remote_pcm_mutex, portMAX_DELAY);
-        remote_pcm_synthesis_done = true;
-        if (!remote_pcm_started) remote_pcm_started = true;
-        xSemaphoreGive(remote_pcm_mutex);
-        TickType_t drain_limit = xTaskGetTickCount() + pdMS_TO_TICKS(30000);
-        while (remote_pcm_session && !remote_cancel
-               && xTaskGetTickCount() < drain_limit)
-            vTaskDelay(pdMS_TO_TICKS(1));
-        printf("REMOTE_PCM text=%u prefill=%u underflows=%u\n",
-               (unsigned)strlen(text), (unsigned)remote_pcm_prefill,
-               remote_pcm_underflows);
+        remote_stream_active = false;
+        xSemaphoreTake(remote_i2s_mutex, portMAX_DELAY);
+        /* Short announcements may finish before reaching the normal jitter
+           prefill.  Release whatever they produced once synthesis is done. */
+        if (remote_fifo_count)
+            remote_fifo_ready = true;
+        size_t queued = remote_fifo_count;
+        size_t maximum = remote_fifo_maximum;
+        xSemaphoreGive(remote_i2s_mutex);
+        printf("REMOTE_STREAM text=%u synth_ms=%u prefill_ms=%u queued_ms=%u maximum_ms=%u callbacks=%u underflows=%u cancel=%u\n",
+               (unsigned)strlen(text),
+               (unsigned)((xTaskGetTickCount() - speech_started)
+                          * portTICK_PERIOD_MS),
+               (unsigned)(remote_fifo_prefill * 1000 / 11025),
+               (unsigned)(queued * 1000 / 11025),
+               (unsigned)(maximum * 1000 / 11025),
+               remote_stream_writes, remote_fifo_underflows,
+               remote_cancel ? 1u : 0u);
         announcement_active = false;
         return;
     }
@@ -450,19 +457,30 @@ static char *remote_extract_speech(const char *json)
     if (!sequence || !(sequence = strchr(sequence, '['))) return NULL;
     const char *limit = strrchr(sequence, ']');
     if (!limit) return NULL;
-    char *out = heap_caps_malloc(1024, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!out) return NULL;
+    /* Decoded text cannot be longer than its JSON representation.  Sizing
+       both buffers from the received sequence avoids the former 1,023-byte
+       utterance truncation and 511-byte single-string truncation. */
+    size_t capacity = (size_t)(limit - sequence) + 1;
+    char *out = heap_caps_malloc(capacity,
+                                 MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    char *value = heap_caps_malloc(capacity,
+                                   MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!out || !value) {
+        free(out);
+        free(value);
+        return NULL;
+    }
     size_t used = 0;
     bool character_mode = false;
-    for (const char *p = sequence + 1; p < limit && used < 1023;) {
+    for (const char *p = sequence + 1; p < limit && used + 1 < capacity;) {
         while (p < limit && (isspace((unsigned char)*p) || *p == ',')) ++p;
         if (p >= limit) break;
         if (*p == '"') {
-            char value[512]; const char *after = p + 1;
+            const char *after = p + 1;
             size_t length = remote_decode_json_string(
-                p, limit, value, sizeof(value), &after);
+                p, limit, value, capacity, &after);
             if (!remote_is_command_string(value))
-                remote_append_sequence_text(out, 1024, &used, value, length,
+                remote_append_sequence_text(out, capacity, &used, value, length,
                                             character_mode);
             else
                 printf("REMOTE_COMMAND_STRING dropped=%.*s\n", 64, value);
@@ -485,10 +503,10 @@ static char *remote_extract_speech(const char *json)
                 if (value_key && value_key < end) {
                     const char *quote = strchr(value_key + 7, '"');
                     if (quote && quote < end) {
-                        char value[512]; const char *after = quote + 1;
+                        const char *after = quote + 1;
                         size_t length = remote_decode_json_string(
-                            quote, end, value, sizeof(value), &after);
-                        remote_append_sequence_text(out, 1024, &used,
+                            quote, end, value, capacity, &after);
+                        remote_append_sequence_text(out, capacity, &used,
                             value, length, character_mode);
                     }
                 }
@@ -500,6 +518,7 @@ static char *remote_extract_speech(const char *json)
     }
     while (used && (out[used-1] == ' ' || out[used-1] == '\n')) --used;
     out[used] = 0;
+    free(value);
     if (!used) { free(out); return NULL; }
     return out;
 }
@@ -572,7 +591,8 @@ static void remote_network_task(void *arg)
             if (strstr(start, "\"type\": \"cancel\"")
                 || strstr(start, "\"type\":\"cancel\"")) {
                 remote_cancel = true;
-                remote_pcm_cancel();
+                remote_stream_active = false;
+                remote_fifo_clear();
                 remote_clear_queue();
             } else if ((strstr(start, "\"type\": \"speak\"")
                       || strstr(start, "\"type\":\"speak\""))) {
@@ -678,6 +698,11 @@ void app_main(void)
 
     i2s_chan_config_t chan = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO,
                                                         I2S_ROLE_MASTER);
+    /* Keep only a short hardware runway.  Remote speech is written directly
+       from OpenEVV's callback, so a large silence-filled DMA queue would add
+       avoidable latency before its first sample. */
+    chan.dma_desc_num = 4;
+    chan.dma_frame_num = 128;
     ESP_ERROR_CHECK(i2s_new_channel(&chan, &audio, NULL));
     i2s_std_config_t std = {
         .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(11025),
@@ -736,17 +761,17 @@ void app_main(void)
     is_remote_mode = status.remote_mode;
     /* The RTC hint can be lost during the reader's staged partition switch;
        network.mode on the SD card is authoritative.  Therefore initialise
-       the buffered remote path only after transfer_mode has resolved the
-       requested mode, but before any remote success/error announcement. */
+       the continuous remote output path only after transfer_mode has resolved
+       the requested mode, but before any remote success/error announcement. */
     if (is_remote_mode) {
-        remote_pcm = heap_caps_malloc(REMOTE_PCM_SAMPLES
-                                      * sizeof(*remote_pcm),
-                                      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        remote_pcm_mutex = xSemaphoreCreateMutex();
-        ESP_ERROR_CHECK(remote_pcm && remote_pcm_mutex
+        remote_fifo = heap_caps_malloc(REMOTE_FIFO_SAMPLES
+                                       * sizeof(*remote_fifo),
+                                       MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        remote_i2s_mutex = xSemaphoreCreateMutex();
+        ESP_ERROR_CHECK(remote_fifo && remote_i2s_mutex
                         ? ESP_OK : ESP_ERR_NO_MEM);
         BaseType_t playback_created = xTaskCreatePinnedToCoreWithCaps(
-            remote_playback_task, "remote_pcm", 16384, NULL, 6, NULL, 1,
+            remote_playback_task, "remote_stream", 8192, NULL, 6, NULL, 1,
             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         ESP_ERROR_CHECK(playback_created == pdPASS
                         ? ESP_OK : ESP_ERR_NO_MEM);
@@ -775,7 +800,8 @@ void app_main(void)
                 transfer_ready = false;
                 remote_stop = true;
                 remote_cancel = true;
-                remote_pcm_cancel();
+                remote_stream_active = false;
+                remote_fifo_clear();
                 speak(voice, "leaving NVDA remote");
                 TickType_t deadline = xTaskGetTickCount()
                     + pdMS_TO_TICKS(4000);

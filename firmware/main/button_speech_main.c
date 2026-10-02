@@ -27,6 +27,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/idf_additions.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "nvs.h"
 #include "nvs_flash.h"
@@ -200,6 +201,22 @@ static volatile bool reader_recording;
 static volatile bool reader_recording_stop;
 static TaskHandle_t reader_recording_task_handle;
 static i2s_chan_handle_t reader_recording_channel;
+#define RECORDING_BLOCK_FRAMES 1024
+#define RECORDING_QUEUE_BLOCKS 64
+typedef struct {
+    size_t frames;
+    int16_t samples[RECORDING_BLOCK_FRAMES];
+} RecordingBlock;
+typedef struct {
+    char final_path[512];
+    QueueHandle_t blocks;
+    SemaphoreHandle_t finished;
+    bool success;
+    uint32_t data_bytes;
+    uint32_t blocks_written;
+    uint32_t slow_writes;
+    uint32_t longest_write_ms;
+} RecordingWriterContext;
 typedef struct { char *from; char *to; } ReaderSubstitution;
 static ReaderSubstitution *reader_substitutions;
 static size_t reader_substitution_count;
@@ -2424,10 +2441,9 @@ static esp_err_t reader_prepare_recording_channel(void)
 {
     i2s_chan_config_t channel =
         I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_1, I2S_ROLE_MASTER);
-    /* Reserve the original, comfortably sized microphone DMA ring before
-       OpenEVV fragments internal RAM.  Creating a tiny ring on demand made
-       recording possible, but left too little tolerance for an SD-card stall
-       and could produce periodic discontinuities that sounded like a buzz. */
+    /* Reserve the proven-small microphone DMA ring before OpenEVV fragments
+       internal RAM.  A PSRAM queue below absorbs FAT/SD write stalls without
+       taking more of the internal memory needed by the speech engine. */
     channel.dma_desc_num = 4;
     channel.dma_frame_num = 64;
     ESP_RETURN_ON_ERROR(
@@ -2460,106 +2476,202 @@ static esp_err_t reader_prepare_recording_channel(void)
     return ESP_OK;
 }
 
-static void reader_recording_task(void *argument)
+static void reader_recording_writer_task(void *argument)
 {
-    char *final_path = argument;
-    puts("RECORDING task entered");
-    char temporary_path[512];
-    snprintf(temporary_path, sizeof(temporary_path), "%s.tmp", final_path);
+    RecordingWriterContext *context = argument;
+    char temporary_path[520];
+    snprintf(temporary_path, sizeof(temporary_path), "%s.tmp",
+             context->final_path);
     FILE *output = fopen(temporary_path, "wb+");
-    i2s_chan_handle_t rx = reader_recording_channel;
-    bool success = output != NULL && rx != NULL;
-    uint32_t data_bytes = 0;
+    bool success = output != NULL;
     uint8_t header[44];
     reader_make_wav_header(header, 0);
     if (success && fwrite(header, 1, sizeof(header), output) != sizeof(header))
         success = false;
 
-    printf("RECORDING dma free_internal=%u largest_dma=%u\n",
-           (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-           (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
-    esp_err_t i2s_result = ESP_OK;
-    bool rx_enabled = false;
-    if (success && (i2s_result = i2s_channel_enable(rx)) != ESP_OK) {
-        printf("RECORDING i2s_enable failed=%s\n", esp_err_to_name(i2s_result));
+    RecordingBlock *block = heap_caps_malloc(
+        sizeof(*block), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!block)
         success = false;
+    while (block && xQueueReceive(context->blocks, block, portMAX_DELAY)
+                    == pdTRUE) {
+        if (!block->frames)
+            break;
+        int64_t started = esp_timer_get_time();
+        size_t written = success
+            ? fwrite(block->samples, sizeof(int16_t), block->frames, output)
+            : 0;
+        uint32_t elapsed_ms =
+            (uint32_t)((esp_timer_get_time() - started) / 1000);
+        if (elapsed_ms > context->longest_write_ms)
+            context->longest_write_ms = elapsed_ms;
+        if (elapsed_ms >= 50)
+            ++context->slow_writes;
+        if (success && written != block->frames)
+            success = false;
+        if (success)
+            context->data_bytes += written * sizeof(int16_t);
+        ++context->blocks_written;
     }
-    if (success)
-        rx_enabled = true;
-    if (success)
-        puts("RECORDING microphone active");
+    free(block);
 
-    int32_t input[512];
-    int16_t mono[256];
+    if (output) {
+        /* The stop key is acoustically captured before the button scanner can
+           notify the capture task.  Remove the final 100 ms from the file. */
+        const uint32_t stop_trim_bytes = (32000U / 10U) * sizeof(int16_t);
+        if (fflush(output))
+            success = false;
+        if (success && context->data_bytes > stop_trim_bytes) {
+            context->data_bytes -= stop_trim_bytes;
+            if (ftruncate(fileno(output), 44 + context->data_bytes) != 0)
+                success = false;
+        }
+        reader_make_wav_header(header, context->data_bytes);
+        if (fseek(output, 0, SEEK_SET)
+            || fwrite(header, 1, sizeof(header), output) != sizeof(header))
+            success = false;
+        if (fflush(output) || fsync(fileno(output)))
+            success = false;
+        fclose(output);
+    }
+    if (success && context->data_bytes
+        && rename(temporary_path, context->final_path) == 0) {
+        context->success = true;
+    } else {
+        (void)unlink(temporary_path);
+        context->success = false;
+    }
+    printf("RECORDING_WRITER blocks=%u bytes=%u slow_writes=%u longest_write_ms=%u success=%u errno=%d\n",
+           (unsigned)context->blocks_written,
+           (unsigned)context->data_bytes,
+           (unsigned)context->slow_writes,
+           (unsigned)context->longest_write_ms,
+           context->success ? 1u : 0u, errno);
+    xSemaphoreGive(context->finished);
+    vTaskDeleteWithCaps(NULL);
+}
+
+static void reader_recording_task(void *argument)
+{
+    char *final_path = argument;
+    puts("RECORDING task entered");
+    i2s_chan_handle_t rx = reader_recording_channel;
+    RecordingWriterContext *context = heap_caps_calloc(
+        1, sizeof(*context), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    int32_t *input = heap_caps_malloc(
+        RECORDING_BLOCK_FRAMES * 2 * sizeof(*input),
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    RecordingBlock *block = heap_caps_malloc(
+        sizeof(*block), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    bool success = context && input && block && rx;
+    if (context) {
+        strlcpy(context->final_path, final_path, sizeof(context->final_path));
+        context->blocks = xQueueCreateWithCaps(
+            RECORDING_QUEUE_BLOCKS, sizeof(RecordingBlock),
+            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        context->finished = xSemaphoreCreateBinary();
+        success = success && context->blocks && context->finished;
+    }
+
+    BaseType_t writer_created = pdFAIL;
+    if (success)
+        writer_created = xTaskCreateWithCaps(
+            reader_recording_writer_task, "recording_writer", 12288,
+            context, 3, NULL, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    success = success && writer_created == pdPASS;
+
+    printf("RECORDING dma free_internal=%u largest_dma=%u queue_bytes=%u\n",
+           (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+           (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA),
+           (unsigned)(RECORDING_QUEUE_BLOCKS * sizeof(RecordingBlock)));
+    bool rx_enabled = false;
+    if (success) {
+        esp_err_t result = i2s_channel_enable(rx);
+        if (result != ESP_OK) {
+            printf("RECORDING i2s_enable failed=%s\n", esp_err_to_name(result));
+            success = false;
+        } else {
+            rx_enabled = true;
+            puts("RECORDING microphone active");
+        }
+    }
+
+    uint32_t captured_blocks = 0;
+    uint32_t read_timeouts = 0;
+    uint32_t queue_high_water = 0;
     while (success && !reader_recording_stop) {
         size_t bytes_read = 0;
-        esp_err_t result = i2s_channel_read(rx, input, sizeof(input),
-                                             &bytes_read,
-                                             pdMS_TO_TICKS(200));
-        if (result == ESP_ERR_TIMEOUT)
+        esp_err_t result = i2s_channel_read(
+            rx, input, RECORDING_BLOCK_FRAMES * 2 * sizeof(*input),
+            &bytes_read, pdMS_TO_TICKS(200));
+        if (result == ESP_ERR_TIMEOUT) {
+            ++read_timeouts;
             continue;
+        }
         if (result != ESP_OK) {
+            printf("RECORDING i2s_read failed=%s\n", esp_err_to_name(result));
             success = false;
             break;
         }
-        size_t frames = bytes_read / (2 * sizeof(int32_t));
-        for (size_t i = 0; i < frames; ++i) {
+        block->frames = bytes_read / (2 * sizeof(int32_t));
+        for (size_t i = 0; i < block->frames; ++i) {
             int32_t left = input[i * 2], right = input[i * 2 + 1];
             int32_t sample = llabs((long long)left) >= llabs((long long)right)
                 ? left : right;
             sample >>= 14;
             if (sample > INT16_MAX) sample = INT16_MAX;
             if (sample < INT16_MIN) sample = INT16_MIN;
-            mono[i] = (int16_t)sample;
+            block->samples[i] = (int16_t)sample;
         }
-        size_t written = fwrite(mono, sizeof(int16_t), frames, output);
-        data_bytes += written * sizeof(int16_t);
-        if (written != frames)
+        if (xQueueSend(context->blocks, block, pdMS_TO_TICKS(100)) != pdTRUE) {
+            puts("RECORDING queue_overrun");
             success = false;
+            break;
+        }
+        ++captured_blocks;
+        uint32_t queued = (uint32_t)uxQueueMessagesWaiting(context->blocks);
+        if (queued > queue_high_water)
+            queue_high_water = queued;
     }
-    if (rx) {
+    if (rx_enabled) {
         puts("RECORDING stopping microphone");
-        if (rx_enabled)
-            (void)i2s_channel_disable(rx);
+        (void)i2s_channel_disable(rx);
     }
-    if (output) {
-        /* The stop key is acoustically captured before the button scanner can
-           notify this task.  Remove the final 100 ms from the file. */
-        const uint32_t stop_trim_bytes = (32000U / 10U) * sizeof(int16_t);
-        if (fflush(output))
-            success = false;
-        if (success && data_bytes > stop_trim_bytes) {
-            data_bytes -= stop_trim_bytes;
-            if (ftruncate(fileno(output), 44 + data_bytes) != 0)
-                success = false;
-        }
-        reader_make_wav_header(header, data_bytes);
-        if (fseek(output, 0, SEEK_SET) ||
-            fwrite(header, 1, sizeof(header), output) != sizeof(header))
-            success = false;
-        if (fflush(output) || fsync(fileno(output)))
-            success = false;
-        fclose(output);
+
+    if (writer_created == pdPASS) {
+        block->frames = 0;
+        (void)xQueueSend(context->blocks, block, portMAX_DELAY);
+        xSemaphoreTake(context->finished, portMAX_DELAY);
+        success = success && context->success;
     }
-    if (success && data_bytes && rename(temporary_path, final_path) == 0) {
+    printf("RECORDING_CAPTURE blocks=%u timeouts=%u queue_high_water=%u success=%u\n",
+           (unsigned)captured_blocks, (unsigned)read_timeouts,
+           (unsigned)queue_high_water, success ? 1u : 0u);
+
+    if (success) {
         printf("RECORDING saved=%s bytes=%u\n", final_path,
-               (unsigned)data_bytes);
+               (unsigned)context->data_bytes);
         if (reader_interface_sounds)
             queue_audio(AUDIO_RECORDING_STOPPED, NULL);
     } else {
-        printf("RECORDING failed path=%s bytes=%u errno=%d\n", final_path,
-               (unsigned)data_bytes, errno);
-        (void)unlink(temporary_path);
+        printf("RECORDING failed path=%s errno=%d\n", final_path, errno);
         strlcpy(reader_announcement, "recording could not be saved",
                 sizeof(reader_announcement));
         queue_audio(AUDIO_SPEECH, reader_announcement);
     }
+
+    if (context) {
+        if (context->blocks)
+            vQueueDeleteWithCaps(context->blocks);
+        if (context->finished)
+            vSemaphoreDelete(context->finished);
+    }
+    free(block);
+    free(input);
+    free(context);
     free(final_path);
     reader_recording = false;
     reader_recording_task_handle = NULL;
-    /* This task's stack is allocated by xTaskCreateWithCaps() in PSRAM.
-       It must be released by the matching capability-aware deletion API;
-       the ordinary FreeRTOS deleter corrupts/aborts during recording stop. */
     puts("RECORDING task complete");
     vTaskDeleteWithCaps(NULL);
 }
@@ -2604,11 +2716,21 @@ static bool reader_begin_recording(void)
         for (unsigned duplicate = 2; access(path, F_OK) == 0; ++duplicate)
             snprintf(path, 512, "%s/%s-%u.wav", folder, stamp, duplicate);
     } else {
-        for (unsigned sequence = 1;; ++sequence) {
-            snprintf(path, 512, "%s/recording-%04u.wav", folder, sequence);
-            if (access(path, F_OK) != 0)
-                break;
+        unsigned highest = 0;
+        DIR *recordings = opendir(folder);
+        if (recordings) {
+            struct dirent *entry;
+            while ((entry = readdir(recordings))) {
+                unsigned sequence;
+                char trailing;
+                if (sscanf(entry->d_name, "recording-%u.wav%c",
+                           &sequence, &trailing) == 1
+                    && sequence > highest)
+                    highest = sequence;
+            }
+            closedir(recordings);
         }
+        snprintf(path, 512, "%s/recording-%04u.wav", folder, highest + 1);
     }
     reader_recording_stop = false;
     reader_recording = true;
