@@ -1575,6 +1575,9 @@ static void queue_audio(enum AudioEventKind kind, const char *text)
     };
     if (text)
         strlcpy(event.text, text, sizeof(event.text));
+    if (kind == AUDIO_NAVIGATION_SPEECH)
+        printf("NAV_SPEECH queued generation=%lu text=%s\n",
+               (unsigned long)event.generation, event.text);
     xQueueOverwrite(audio_queue, &event);
 }
 
@@ -3081,8 +3084,14 @@ static void reader_button_scan_task(void *argument)
                         reader_speak_menu_item();
                     }
                 } else if (reader_library) {
-                    if (reader_library_count && reader_library_index > 0)
-                        --reader_library_index;
+                    if (reader_library_count)
+                        reader_library_index = reader_library_index
+                            ? reader_library_index - 1
+                            : reader_library_count - 1;
+                    /* Abort an obsolete title immediately.  The debounce
+                       below will announce only the final selection after a
+                       rapid run of presses. */
+                    ++requested_generation;
                     library_announcement_pending = true;
                     library_changed_at = xTaskGetTickCount();
                 } else if (reader_paused) {
@@ -3216,9 +3225,10 @@ static void reader_button_scan_task(void *argument)
                 else if (reader_menu_index == 12)
                     reader_change_volume(1);
             } else if (reader_library && stable_key == 4) {
-                if (reader_library_count
-                    && reader_library_index + 1 < reader_library_count)
-                    ++reader_library_index;
+                if (reader_library_count)
+                    reader_library_index = (reader_library_index + 1)
+                        % reader_library_count;
+                ++requested_generation;
                 library_announcement_pending = true;
                 library_changed_at = xTaskGetTickCount();
             } else if (reader_library && stable_key == 5) {
@@ -3572,8 +3582,13 @@ static void reader_engine_task(void *arg)
         AudioEvent event;
         if (xQueueReceive(audio_queue, &event, portMAX_DELAY) != pdTRUE)
             continue;
-        if (event.generation != requested_generation)
+        if (event.generation != requested_generation) {
+            if (event.kind == AUDIO_NAVIGATION_SPEECH)
+                printf("NAV_SPEECH stale event=%lu requested=%lu\n",
+                       (unsigned long)event.generation,
+                       (unsigned long)requested_generation);
             continue;
+        }
         reader_ui_busy = event.kind != AUDIO_PARAGRAPH;
         if (event.kind != AUDIO_PARAGRAPH && reader_ui_tone_pending) {
             reader_ui_tone_pending = false;
@@ -3741,6 +3756,8 @@ static void reader_engine_task(void *arg)
             continue;
         }
         if (event.kind == AUDIO_NAVIGATION_SPEECH) {
+            printf("NAV_SPEECH speaking generation=%lu text=%s\n",
+                   (unsigned long)event.generation, event.text);
             if (!reader_discard_dma_audio()) {
                 ESP_LOGE(TAG, "could not reset audio output");
                 continue;
