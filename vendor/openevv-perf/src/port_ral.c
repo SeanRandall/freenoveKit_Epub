@@ -19,6 +19,9 @@
 
 #include <stdarg.h>
 #include "evv_arena.h"
+#ifdef ESP_PLATFORM
+#include "esp_heap_caps.h"
+#endif
 
 int g_iTTSLogLevel = 9;
 int RAL_THREAD_PRIORITY_NORMAL = 0;
@@ -56,25 +59,48 @@ void elgTraceLog(int level, const char *fmt, ...)
    address the caller already had. Both are just keys, and the table below is
    keyed by the value itself either way. */
 
-#define RAL_MAX 1024
+/* The desktop-oriented port originally reserved 1,024 entries.  On the
+   ESP32-S3 these tables live in scarce internal DRAM and consumed about
+   20 KB, while a complete synthesis pass peaks at only 65 live objects.
+   Keep twice that observed requirement without starving FreeRTOS's own
+   semaphore allocations. */
+#define RAL_MAX 128
 
 /* An entry is a semaphore or an event, and which it is has to be
    remembered because they are destroyed and waited on differently. */
 #define RAL_SEM    1
 #define RAL_EVENT  2
 
-static uintptr_t ral_key[RAL_MAX];
-static void    *ral_obj[RAL_MAX];
-static int      ral_kind[RAL_MAX];
-static unsigned ral_owner[RAL_MAX];
-static int    ral_depth[RAL_MAX];
+static uintptr_t *ral_key;
+static void     **ral_obj;
+static int       *ral_kind;
+static unsigned  *ral_owner;
+static int       *ral_depth;
 static uintptr_t ral_next = 1;
 static int    ral_trace;
+static unsigned ral_live;
+static unsigned ral_peak;
 
 static void ral_init(void) __attribute__((constructor));
 static void ral_init(void)
 {
     ral_trace = getenv("RAL_TRACE") != NULL;
+#ifdef ESP_PLATFORM
+#define RAL_CALLOC(n, size) heap_caps_calloc((n), (size), \
+                                  MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
+#else
+#define RAL_CALLOC(n, size) calloc((n), (size))
+#endif
+    ral_key = RAL_CALLOC(RAL_MAX, sizeof(*ral_key));
+    ral_obj = RAL_CALLOC(RAL_MAX, sizeof(*ral_obj));
+    ral_kind = RAL_CALLOC(RAL_MAX, sizeof(*ral_kind));
+    ral_owner = RAL_CALLOC(RAL_MAX, sizeof(*ral_owner));
+    ral_depth = RAL_CALLOC(RAL_MAX, sizeof(*ral_depth));
+    if (!ral_key || !ral_obj || !ral_kind || !ral_owner || !ral_depth) {
+        fputs("RAL_INIT_FAIL synchronization table allocation\n", stderr);
+        abort();
+    }
+#undef RAL_CALLOC
 }
 
 static void ral_say(const char *what, uintptr_t key, int rc)
@@ -107,16 +133,26 @@ static int ral_slot(uintptr_t key)
 static int ral_bind(uintptr_t key, void *h, int kind)
 {
     int i;
+    int existing;
 
-    if (h == NULL)
+    if (h == NULL) {
+        fprintf(stderr,
+                "RAL_BIND_FAIL reason=object-allocation key=%08lx live=%u peak=%u\n",
+                (unsigned long)key, ral_live, ral_peak);
         return 10041;
+    }
 
     i = ral_slot(key);
+    existing = i >= 0;
     if (i < 0)
         for (i = 0; i < RAL_MAX; i++)
             if (ral_obj[i] == NULL)
                 break;
     if (i >= RAL_MAX) {
+        fprintf(stderr,
+                "RAL_BIND_FAIL reason=table-full key=%08lx live=%u peak=%u max=%u\n",
+                (unsigned long)key, ral_live, ral_peak,
+                (unsigned)RAL_MAX);
         ral_free(h, kind);
         return 10041;
     }
@@ -129,6 +165,15 @@ static int ral_bind(uintptr_t key, void *h, int kind)
     ral_kind[i] = kind;
     ral_owner[i] = 0;
     ral_depth[i] = 0;
+    if (!existing) {
+        ++ral_live;
+        if (ral_live > ral_peak) {
+            ral_peak = ral_live;
+            if (ral_peak == 1 || !(ral_peak % 64))
+                fprintf(stderr, "RAL_HIGH_WATER live=%u max=%u\n",
+                        ral_peak, (unsigned)RAL_MAX);
+        }
+    }
     return 0;
 }
 
@@ -216,6 +261,8 @@ static int ral_drop(struct ral_req *r, const char *what)
     ral_key[i] = 0;
     ral_obj[i] = NULL;
     ral_kind[i] = 0;
+    if (ral_live)
+        --ral_live;
     ral_say(what, (uintptr_t)r->a, 0);
     return 0;
 }

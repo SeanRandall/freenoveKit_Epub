@@ -1,10 +1,14 @@
 #include "epub_text.h"
 
 #include <ctype.h>
+#include <dirent.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
 
 #include "esp_heap_caps.h"
 #include "esp_attr.h"
@@ -15,6 +19,8 @@
 #define ZIP_LOCAL UINT32_C(0x04034b50)
 #define MAX_EPUB_ENTRY (2U * 1024U * 1024U)
 #define MAX_BOOK_TEXT (512U * 1024U)
+#define CACHE_ROOT "/sdcard/.evv/.cache"
+#define CACHE_VERSION UINT32_C(3)
 
 typedef struct {
     char name[384];
@@ -188,9 +194,9 @@ static void base_dir(const char *path, char *out, size_t cap)
     if (slash) slash[1] = 0; else out[0] = 0;
 }
 
-static void append_space(char *out, size_t *used)
+static void append_space(char *out, size_t *used, size_t capacity)
 {
-    if (*used && out[*used - 1] != ' ' && *used + 1 < MAX_BOOK_TEXT)
+    if (*used && out[*used - 1] != ' ' && *used + 1 < capacity)
         out[(*used)++] = ' ';
 }
 
@@ -307,29 +313,30 @@ static void add_marker(epub_document_t *document, epub_marker_type_t type,
         strlcpy(marker->name, name, sizeof(marker->name));
 }
 
-static void append_image_alt(const char *description, char *out, size_t *used)
+static void append_image_alt(const char *description, char *out, size_t *used,
+                             size_t capacity)
 {
     if (!description || !description[0]) return;
-    append_space(out, used);
-    for (const char *p = description; *p && *used + 2 < MAX_BOOK_TEXT;) {
+    append_space(out, used, capacity);
+    for (const char *p = description; *p && *used + 2 < capacity;) {
         if (*p == '&') {
             if (!strncmp(p, "&amp;", 5)) { out[(*used)++] = '&'; p += 5; continue; }
             if (!strncmp(p, "&quot;", 6)) { out[(*used)++] = '"'; p += 6; continue; }
             if (!strncmp(p, "&apos;", 6)) { out[(*used)++] = '\''; p += 6; continue; }
-            if (!strncmp(p, "&nbsp;", 6)) { append_space(out, used); p += 6; continue; }
+            if (!strncmp(p, "&nbsp;", 6)) { append_space(out, used, capacity); p += 6; continue; }
         }
         size_t bytes = 1;
         uint32_t cp = utf8_codepoint((const unsigned char *)p, &bytes);
         unsigned char c = windows_1252(cp);
         p += bytes;
-        if (isspace(c)) append_space(out, used);
+        if (isspace(c)) append_space(out, used, capacity);
         else if (c >= 32) out[(*used)++] = (char)c;
     }
-    append_space(out, used);
+    append_space(out, used, capacity);
 }
 
 static void html_to_text(const char *html, char *out, size_t *used,
-                         epub_document_t *document)
+                         size_t capacity, epub_document_t *document)
 {
     /* XHTML metadata belongs to the document head, not the reading stream.
        Begin at the body when it is present so <title> and other head text can
@@ -345,7 +352,7 @@ static void html_to_text(const char *html, char *out, size_t *used,
     }
     bool tag = false, suppress = false;
     size_t i = 0;
-    for (; body[i] && *used + 2 < MAX_BOOK_TEXT;) {
+    for (; body[i] && *used + 2 < capacity;) {
         if (!tag && body[i] == '<') {
             const char *element = body + i;
             if (element[1] && tolower((unsigned char)element[1]) == 'h'
@@ -362,7 +369,7 @@ static void html_to_text(const char *html, char *out, size_t *used,
                 char description[96] = { 0 };
                 (void)attribute(element, "alt", description,
                                 sizeof(description));
-                append_image_alt(description, out, used);
+                append_image_alt(description, out, used, capacity);
             }
             bool block = is_block_tag(body + i);
             tag = true;
@@ -370,7 +377,7 @@ static void html_to_text(const char *html, char *out, size_t *used,
                 || !strncasecmp(body + i, "<style", 6)) suppress = true;
             if (!strncasecmp(body + i, "</script", 8)
                 || !strncasecmp(body + i, "</style", 7)) suppress = false;
-            if (block) append_space(out, used);
+            if (block) append_space(out, used, capacity);
             ++i; continue;
         }
         if (tag) {
@@ -396,15 +403,201 @@ static void html_to_text(const char *html, char *out, size_t *used,
         uint32_t cp = utf8_codepoint((const unsigned char *)body + i, &bytes);
         i += bytes;
         unsigned char c = windows_1252(cp);
-        if (isspace(c)) append_space(out, used);
+        if (isspace(c)) append_space(out, used, capacity);
         else if (c >= 32) out[(*used)++] = (char)c;
     }
     if (body[i])
         document->truncated = true;
-    append_space(out, used);
+    append_space(out, used, capacity);
 }
 
-esp_err_t epub_load_document(const char *path, epub_document_t *document)
+typedef struct { char id[96]; char href[384]; } manifest_item_t;
+
+static uint32_t cache_hash(const char *path)
+{
+    struct stat st = { 0 };
+    (void)stat(path, &st);
+    uint32_t hash = UINT32_C(2166136261) ^ CACHE_VERSION;
+    for (const unsigned char *p = (const unsigned char *)path; *p; ++p) {
+        hash ^= *p;
+        hash *= UINT32_C(16777619);
+    }
+    uint64_t values[] = { (uint64_t)st.st_size, (uint64_t)st.st_mtime };
+    for (size_t i = 0; i < sizeof(values); ++i) {
+        hash ^= ((const unsigned char *)values)[i];
+        hash *= UINT32_C(16777619);
+    }
+    return hash;
+}
+
+static void remove_cache_tree(const char *path)
+{
+    DIR *directory = opendir(path);
+    if (!directory) { (void)remove(path); return; }
+    struct dirent *entry;
+    while ((entry = readdir(directory))) {
+        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, ".."))
+            continue;
+        char child[640];
+        snprintf(child, sizeof(child), "%s/%s", path, entry->d_name);
+        struct stat info;
+        if (stat(child, &info) == 0 && S_ISDIR(info.st_mode))
+            remove_cache_tree(child);
+        else
+            (void)remove(child);
+    }
+    closedir(directory);
+    (void)rmdir(path);
+}
+
+static void ensure_cache_schema(void)
+{
+    char schema_path[256];
+    snprintf(schema_path, sizeof(schema_path), CACHE_ROOT "/.schema");
+    FILE *schema = fopen(schema_path, "rb");
+    unsigned version = 0;
+    if (schema) { (void)fscanf(schema, "%u", &version); fclose(schema); }
+    if (version == CACHE_VERSION) return;
+    /* CACHE_ROOT is a fixed application-owned path.  Old cache formats are
+       disposable and cannot safely be interpreted by the indexed reader. */
+    remove_cache_tree(CACHE_ROOT);
+    (void)mkdir(CACHE_ROOT, 0775);
+    schema = fopen(schema_path, "wb");
+    if (schema) { fprintf(schema, "%u\n", (unsigned)CACHE_VERSION); fclose(schema); }
+    printf("EPUB_CACHE_RESET schema=%u\n", (unsigned)CACHE_VERSION);
+}
+
+static void ensure_cache_directory(const char *path, char *out, size_t cap)
+{
+    (void)mkdir("/sdcard/.evv", 0775);
+    (void)mkdir(CACHE_ROOT, 0775);
+    ensure_cache_schema();
+    snprintf(out, cap, CACHE_ROOT "/%08lx", (unsigned long)cache_hash(path));
+    (void)mkdir(out, 0775);
+}
+
+static uint32_t count_words(const char *text, size_t length)
+{
+    uint32_t words = 0;
+    bool in_word = false;
+    for (size_t i = 0; i < length; ++i) {
+        unsigned char c = (unsigned char)text[i];
+        bool word = isalnum(c) || c >= 0x80 || c == '\'';
+        if (word && !in_word) ++words;
+        in_word = word;
+    }
+    return words;
+}
+
+#define CACHE_INDEX_MAGIC UINT32_C(0x58495645) /* EVIX */
+
+typedef struct {
+    uint32_t magic;
+    uint32_t version;
+    uint32_t complete;
+    uint32_t section_count;
+    uint32_t marker_count;
+    uint32_t text_length;
+    uint64_t word_count;
+} cache_index_header_t;
+
+static bool cache_load_book(const char *directory, epub_document_t *document)
+{
+    char index_path[512], text_path[512];
+    snprintf(index_path, sizeof(index_path), "%s/book.idx", directory);
+    snprintf(text_path, sizeof(text_path), "%s/book.txt", directory);
+    FILE *index = fopen(index_path, "rb");
+    if (!index) return false;
+    cache_index_header_t header;
+    bool valid = fread(&header, sizeof(header), 1, index) == 1
+        && header.magic == CACHE_INDEX_MAGIC
+        && header.version == CACHE_VERSION && header.complete == 1
+        && header.section_count > 0
+        && header.section_count <= EPUB_MAX_SECTIONS
+        && header.marker_count <= EPUB_MAX_MARKERS
+        && header.text_length > 0;
+    if (valid)
+        valid = fread(document->sections, sizeof(*document->sections),
+                      header.section_count, index) == header.section_count
+            && fread(document->markers, sizeof(*document->markers),
+                     header.marker_count, index) == header.marker_count;
+    fclose(index);
+    if (!valid) return false;
+    FILE *text = fopen(text_path, "rb");
+    if (!text) return false;
+    fseek(text, 0, SEEK_END);
+    long actual = ftell(text);
+    fseek(text, 0, SEEK_SET);
+    valid = actual == (long)header.text_length;
+    fclose(text);
+    if (!valid) return false;
+    strlcpy(document->cache_text_path, text_path,
+            sizeof(document->cache_text_path));
+    document->section_count = header.section_count;
+    document->marker_count = header.marker_count;
+    document->text_length = header.text_length;
+    document->word_count = header.word_count;
+    document->cache_complete = true;
+    printf("EPUB_CACHE hit text_bytes=%u sections=%u markers=%u words=%llu\n",
+           (unsigned)header.text_length, (unsigned)header.section_count,
+           (unsigned)header.marker_count,
+           (unsigned long long)header.word_count);
+    return true;
+}
+
+static bool cache_publish_book(const char *directory,
+                               const epub_document_t *document,
+                               const char *text_temp)
+{
+    char text_path[512], index_path[512], index_temp[512];
+    snprintf(text_path, sizeof(text_path), "%s/book.txt", directory);
+    snprintf(index_path, sizeof(index_path), "%s/book.idx", directory);
+    snprintf(index_temp, sizeof(index_temp), "%s/book.idx.tmp", directory);
+    FILE *index = fopen(index_temp, "wb");
+    if (!index) { remove(text_temp); return false; }
+    cache_index_header_t header = {
+        .magic = CACHE_INDEX_MAGIC, .version = CACHE_VERSION,
+        .complete = 1,
+        .section_count = (uint32_t)document->section_count,
+        .marker_count = (uint32_t)document->marker_count,
+        .text_length = (uint32_t)document->text_length,
+        .word_count = document->word_count,
+    };
+    bool okay = fwrite(&header, sizeof(header), 1, index) == 1
+        && fwrite(document->sections, sizeof(*document->sections),
+                  document->section_count, index) == document->section_count
+        && fwrite(document->markers, sizeof(*document->markers),
+                  document->marker_count, index) == document->marker_count
+        && fflush(index) == 0;
+    fclose(index);
+    if (!okay) { remove(text_temp); remove(index_temp); return false; }
+    /* Publish text first and the validating complete index last. */
+    remove(text_path); remove(index_path);
+    if (rename(text_temp, text_path) != 0
+        || rename(index_temp, index_path) != 0) {
+        remove(text_temp); remove(index_temp); return false;
+    }
+    return true;
+}
+
+bool epub_read_text(const epub_document_t *document, size_t offset,
+                    char *destination, size_t length)
+{
+    if (!document || !destination || !length
+        || offset > document->text_length
+        || length > document->text_length - offset
+        || !document->cache_text_path[0])
+        return false;
+    FILE *file = fopen(document->cache_text_path, "rb");
+    if (!file) return false;
+    bool okay = fseek(file, (long)offset, SEEK_SET) == 0
+        && fread(destination, 1, length, file) == length;
+    fclose(file);
+    return okay;
+}
+
+esp_err_t epub_load_document_at(const char *path, size_t focus_section,
+                                epub_document_t *document)
 {
     memset(document, 0, sizeof(*document));
     zip_file_t zip;
@@ -430,7 +623,6 @@ esp_err_t epub_load_document(const char *path, epub_document_t *document)
     }
     if (!document->title[0]) strlcpy(document->title, path, sizeof(document->title));
 
-    typedef struct { char id[96]; char href[384]; } manifest_item_t;
     manifest_item_t *items = heap_caps_calloc(256, sizeof(*items),
         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!items) { free(opf); fclose(zip.file); return ESP_ERR_NO_MEM; }
@@ -445,73 +637,144 @@ esp_err_t epub_load_document(const char *path, epub_document_t *document)
         p = end + 1;
     }
 
-    char *book = heap_caps_malloc(MAX_BOOK_TEXT,
-        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     document->sections = heap_caps_calloc(EPUB_MAX_SECTIONS,
         sizeof(*document->sections), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     document->markers = heap_caps_calloc(EPUB_MAX_MARKERS,
         sizeof(*document->markers), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!book || !document->sections || !document->markers) {
-        free(book); free(document->sections); free(document->markers);
+    if (!document->sections || !document->markers) {
+        free(document->sections); free(document->markers);
         document->sections = NULL; document->markers = NULL;
         free(items); free(opf); fclose(zip.file); return ESP_ERR_NO_MEM;
     }
-    size_t used = 0;
+    char (*spines)[768] = heap_caps_calloc(EPUB_MAX_SECTIONS,
+        sizeof(*spines), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!spines) {
+        free(document->sections); free(document->markers);
+        free(items); free(opf); fclose(zip.file); return ESP_ERR_NO_MEM;
+    }
     char directory[384]; base_dir(opf_path, directory, sizeof(directory));
-    for (const char *p = opf; (p = strstr(p, "<itemref "));) {
+    size_t spine_count = 0;
+    for (const char *p = opf; spine_count < EPUB_MAX_SECTIONS
+         && (p = strstr(p, "<itemref "));) {
         char idref[96] = { 0 };
         if (attribute(p, "idref", idref, sizeof(idref))) {
             for (size_t i = 0; i < item_count; ++i) if (!strcmp(idref, items[i].id)) {
-                char entry[768];
-                snprintf(entry, sizeof(entry), "%s%s", directory, items[i].href);
-                size_t html_length;
-                char *html = zip_extract(&zip, entry, &html_length);
-                if (html) {
-                    size_t section_start = used;
-                    html_to_text(html, book, &used, document);
-                    while (used > section_start && book[used - 1] == ' ')
-                        --used;
-                    if (used > section_start
-                        && document->section_count < EPUB_MAX_SECTIONS) {
-                        epub_section_t *section =
-                            &document->sections[document->section_count++];
-                        section->text_offset = section_start;
-                        extract_heading(html, section->name,
-                                        sizeof(section->name));
-                        append_space(book, &used);
-                    }
-                    free(html);
-                }
+                snprintf(spines[spine_count++], sizeof(*spines), "%s%s",
+                         directory, items[i].href);
                 break;
             }
         }
         ++p;
-        if (document->truncated)
-            break;
     }
-    free(items); free(opf); fclose(zip.file);
-    while (used && book[used - 1] == ' ') --used;
-    book[used] = 0;
-    if (!used) {
-        free(book); free(document->sections); free(document->markers);
+    free(items); free(opf);
+
+    char cache_directory[448];
+    ensure_cache_directory(path, cache_directory, sizeof(cache_directory));
+    if (focus_section >= spine_count) focus_section = 0;
+    document->focus_section = focus_section;
+    if (cache_load_book(cache_directory, document)) {
+        free(spines); fclose(zip.file);
+        return ESP_OK;
+    }
+
+    char text_temp[512];
+    snprintf(text_temp, sizeof(text_temp), "%s/book.txt.tmp",
+             cache_directory);
+    FILE *cache_text = fopen(text_temp, "wb");
+    char *normal = heap_caps_malloc(MAX_EPUB_ENTRY + 1,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    epub_marker_t *local_markers = heap_caps_calloc(EPUB_MAX_MARKERS,
+        sizeof(*local_markers), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!cache_text || !normal || !local_markers) {
+        if (cache_text) fclose(cache_text);
+        remove(text_temp);
+        free(normal); free(local_markers); free(spines); fclose(zip.file);
+        free(document->sections); free(document->markers);
+        document->sections = NULL; document->markers = NULL;
+        return ESP_ERR_NO_MEM;
+    }
+    size_t used = 0;
+    bool scan_okay = true;
+    for (size_t spine = 0; spine < spine_count; ++spine) {
+        size_t html_length = 0;
+        char *html = zip_extract(&zip, spines[spine], &html_length);
+        if (!html) { scan_okay = false; break; }
+        size_t section_start = used;
+        epub_document_t local = { .markers = local_markers };
+        size_t section_length = 0;
+        html_to_text(html, normal, &section_length, MAX_EPUB_ENTRY, &local);
+        while (section_length && normal[section_length - 1] == ' ')
+            --section_length;
+        if (local.truncated) {
+            scan_okay = false; document->truncated = true;
+            free(html); break;
+        }
+        if (!section_length) { free(html); continue; }
+        if (document->section_count >= EPUB_MAX_SECTIONS
+            || used > UINT32_MAX - section_length - 1) {
+            scan_okay = false; document->truncated = true;
+            free(html); break;
+        }
+        epub_section_t *section = &document->sections[document->section_count++];
+        section->text_offset = section_start;
+        section->text_length = section_length;
+        section->word_count = count_words(normal, section_length);
+        document->word_count += section->word_count;
+        size_t marker_start = document->marker_count;
+        for (size_t marker = 0; marker < local.marker_count
+             && document->marker_count < EPUB_MAX_MARKERS; ++marker) {
+            epub_marker_t *destination =
+                &document->markers[document->marker_count++];
+            *destination = local_markers[marker];
+            destination->text_offset += section_start;
+        }
+        if (local.marker_count && local_markers[0].name[0])
+            strlcpy(section->name, local_markers[0].name,
+                    sizeof(section->name));
+        if (fwrite(normal, 1, section_length, cache_text) != section_length
+            || fputc(' ', cache_text) == EOF) {
+            scan_okay = false; free(html); break;
+        }
+        used += section_length + 1;
+        printf("EPUB_INDEX spine=%u offset=%u bytes=%u words=%u headings=%u\n",
+               (unsigned)spine + 1, (unsigned)section_start,
+               (unsigned)section->text_length,
+               (unsigned)section->word_count,
+               (unsigned)(document->marker_count - marker_start));
+        free(html);
+    }
+    bool text_written = fflush(cache_text) == 0;
+    fclose(cache_text);
+    free(normal); free(local_markers); free(spines); fclose(zip.file);
+    if (!scan_okay || !text_written || !used) {
+        remove(text_temp);
+        free(document->sections); free(document->markers);
         document->sections = NULL; document->markers = NULL;
         return ESP_ERR_INVALID_RESPONSE;
     }
-    document->text = book;
     document->text_length = used;
-    if (!document->section_count) {
-        document->section_count = 1;
-        document->sections[0].text_length = used;
-    } else {
-        for (size_t i = 0; i < document->section_count; ++i) {
-            size_t end = i + 1 < document->section_count
-                ? document->sections[i + 1].text_offset : used;
-            document->sections[i].text_length =
-                end > document->sections[i].text_offset
-                    ? end - document->sections[i].text_offset : 0;
-        }
+    /* Empty navigation/cover spine items are legal and need not become
+       reader sections; completing the scan, rather than equality with the
+       readable-section count, makes the index publishable. */
+    document->cache_complete = !document->truncated && used > 0;
+    if (document->cache_complete
+        && cache_publish_book(cache_directory, document, text_temp)) {
+        document->index_rebuilt = true;
+        snprintf(document->cache_text_path,
+                 sizeof(document->cache_text_path), "%s/book.txt",
+                 cache_directory);
+        printf("EPUB_INDEX_READY text_bytes=%u sections=%u markers=%u words=%llu\n",
+               (unsigned)document->text_length,
+               (unsigned)document->section_count,
+               (unsigned)document->marker_count,
+               (unsigned long long)document->word_count);
     }
     return ESP_OK;
+}
+
+esp_err_t epub_load_document(const char *path, epub_document_t *document)
+{
+    return epub_load_document_at(path, 0, document);
 }
 
 void epub_free_document(epub_document_t *document)

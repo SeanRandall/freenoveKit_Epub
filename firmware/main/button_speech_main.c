@@ -63,6 +63,7 @@ void evv_port_start(void);
 #define FRAME_SAMPLES 2048
 #define PAUSE_REWIND_MS 500
 #define ROLLING_START_MS 4000
+#define NAVIGATION_START_MS 1200
 #define OPENING_BOOK_SOUND_MS 500
 #define READER_PCM_BYTES ((7u * 1024u * 1024u) / 2u)
 #define READER_RETAIN_SAMPLES (SAMPLE_RATE * 8)
@@ -157,6 +158,7 @@ static size_t reader_book_length;
 static bool reader_resume_after_load;
 static bool reader_section_announcement;
 static bool reader_section_change_pending;
+static bool reader_quick_start;
 static volatile bool reader_continue_pending;
 static volatile bool reader_menu;
 static bool reader_status_menu;
@@ -165,6 +167,18 @@ static volatile bool reader_menu_announcement_pending;
 static TickType_t reader_menu_changed_at;
 static volatile bool reader_preferences_dirty;
 static TickType_t reader_preferences_changed_at;
+static volatile bool reader_preferences_save_requested;
+static volatile bool reader_position_save_requested;
+static volatile bool reader_lastbook_save_requested;
+static volatile bool reader_position_read_requested;
+static volatile bool reader_position_read_done;
+static char reader_pending_position_path[256];
+static uint32_t reader_pending_section;
+static uint32_t reader_pending_offset;
+static char reader_pending_lastbook[256];
+static char reader_pending_read_path[256];
+static uint32_t reader_pending_read_section;
+static uint32_t reader_pending_read_offset;
 static bool reader_dictionary_commands = true;
 static bool reader_substitutions_enabled = true;
 static bool reader_interface_sounds = true;
@@ -288,7 +302,10 @@ enum AudioEventKind {
 };
 typedef struct {
     enum AudioEventKind kind;
-    const char *text;
+    /* Own the announcement.  Most callers format into reader_announcement;
+       retaining that shared pointer let a rapid second press alter text while
+       the audio task was still consuming the first one. */
+    char text[sizeof(reader_announcement)];
     uint32_t generation;
 } AudioEvent;
 
@@ -856,11 +873,23 @@ static bool reader_start_next_text_chunk(OldInst *instance)
        to bridge into the normal rolling producer; subsequent requests retain
        the larger high-rate batches that keep playback comfortably ahead. */
     bool cold_chunk = reader_pcm_samples == 0;
-    size_t chunk_target = cold_chunk ? 320
+    size_t chunk_target = cold_chunk
+        ? (reader_quick_start ? 120 : 320)
         : reader_rate <= 115 ? 180
         : reader_rate <= 120 ? 320
         : reader_rate <= 130 ? 480 : 640;
     size_t take = until_section < chunk_target ? until_section : chunk_target;
+    size_t lookahead = until_section < sizeof(reader_text_chunk) - 1
+        ? until_section : sizeof(reader_text_chunk) - 1;
+    if (!epub_read_text(&reader_document,
+                        reader_stream_base_absolute + chunk_start,
+                        reader_text_chunk, lookahead)) {
+        printf("EPUB_READ_FAILED absolute=%u bytes=%u\n",
+               (unsigned)(reader_stream_base_absolute + chunk_start),
+               (unsigned)lookahead);
+        return false;
+    }
+    reader_text_chunk[lookahead] = 0;
     bool sentence_ended = until_section <= take;
     if (take < until_section) {
         /* Batch as many complete sentences as fit.  Previously assigning
@@ -870,14 +899,14 @@ static bool reader_start_next_text_chunk(OldInst *instance)
         const size_t scan_limit = take;
         size_t last_sentence_boundary = 0;
         for (size_t at = 0; at < scan_limit; ++at) {
-            unsigned char c = (unsigned char)reader_book_text[chunk_start + at];
+            unsigned char c = (unsigned char)reader_text_chunk[at];
             if (c != '.' && c != '?' && c != '!') continue;
             size_t after = at + 1;
             while (after < until_section && after < scan_limit
-                   && strchr("\"')\x92\x94", reader_book_text[chunk_start + after]))
+                   && strchr("\"')\x92\x94", reader_text_chunk[after]))
                 ++after;
             if (after == until_section
-                || reader_book_text[chunk_start + after] == ' ') {
+                || reader_text_chunk[after] == ' ') {
                 last_sentence_boundary = after;
             }
         }
@@ -889,17 +918,18 @@ static bool reader_start_next_text_chunk(OldInst *instance)
         } else {
             size_t boundary = take;
             while (boundary > 90
-                   && reader_book_text[chunk_start + boundary] != ' ')
+                   && reader_text_chunk[boundary] != ' ')
                 --boundary;
             if (boundary > 90) take = boundary;
         }
     }
-    memcpy(reader_text_chunk, reader_book_text + reader_text_offset, take);
-    reader_text_chunk[take] = '\0';
     reader_text_offset += take;
-    while (reader_text_offset < text_len
-           && reader_book_text[reader_text_offset] == ' ')
+    size_t skipped = take;
+    while (skipped < lookahead && reader_text_chunk[skipped] == ' ') {
         ++reader_text_offset;
+        ++skipped;
+    }
+    reader_text_chunk[take] = '\0';
 
     reader_rendering = true;
     size_t lead_before = reader_pcm_samples >= reader_play_offset
@@ -996,6 +1026,8 @@ static bool reader_speak_buffered(OldInst *instance, const char *text,
 static bool reader_load_book(OldInst *instance, uint32_t generation)
 {
     int64_t started_us = esp_timer_get_time();
+    unsigned start_target_ms = reader_quick_start
+        ? NAVIGATION_START_MS : ROLLING_START_MS;
     reader_pcm_samples = 0;
     /* Absolute ring counters belong to the discarded cache. Reset the read
        counter at the same time as the write counter; retaining an offset from
@@ -1006,6 +1038,11 @@ static bool reader_load_book(OldInst *instance, uint32_t generation)
     reader_pcm_valid = false;
     reader_loaded = false;
     reader_render_abort = false;
+    /* A navigation announcement may have requested that the previous book
+       render stop.  That request belongs to the discarded generation; if it
+       survives into this load, reader_start_next_text_chunk() aborts before
+       its first indexed SD read. */
+    reader_render_stop_requested = false;
     reader_rendering = false;
     reader_production_complete = false;
     reader_text_offset = 0;
@@ -1024,8 +1061,9 @@ static bool reader_load_book(OldInst *instance, uint32_t generation)
         }
     }
     active_generation = generation;
-    printf("ROLLING_BEGIN text_bytes=%u rate=%d target_lead_ms=%d\n",
-           (unsigned)reader_book_length, reader_rate, ROLLING_START_MS);
+    printf("ROLLING_BEGIN text_bytes=%u rate=%d target_lead_ms=%u quick=%d\n",
+           (unsigned)reader_book_length, reader_rate, start_target_ms,
+           reader_quick_start ? 1 : 0);
     if (!reader_start_next_text_chunk(instance))
         return false;
 
@@ -1044,7 +1082,7 @@ static bool reader_load_book(OldInst *instance, uint32_t generation)
        the concurrently running synthesizer.  Build a materially larger lead
        before enabling playback, while retaining rolling generation after it
        starts. */
-    while (reader_pcm_samples * 1000 / SAMPLE_RATE < ROLLING_START_MS
+    while (reader_pcm_samples * 1000 / SAMPLE_RATE < start_target_ms
            && reader_text_offset < reader_book_length) {
         vTaskDelay(pdMS_TO_TICKS(10));
         if (!reader_start_next_text_chunk(instance))
@@ -1533,9 +1571,10 @@ static void queue_audio(enum AudioEventKind kind, const char *text)
 #endif
     AudioEvent event = {
         .kind = kind,
-        .text = text,
         .generation = ++requested_generation,
     };
+    if (text)
+        strlcpy(event.text, text, sizeof(event.text));
     xQueueOverwrite(audio_queue, &event);
 }
 
@@ -1570,10 +1609,48 @@ static void reader_save_preferences(void)
     (void)nvs_commit(reader_prefs);
 }
 
+static void reader_section_key_for(const char *path, char key[16]);
+static void reader_offset_key_for(const char *path, char key[16]);
+
 static void reader_schedule_preferences_save(void)
 {
     reader_preferences_dirty = true;
     reader_preferences_changed_at = xTaskGetTickCount();
+}
+
+/* Called only by app_main, whose stack is internal RAM. Flash/NVS operations
+   temporarily disable the external-RAM cache and must never run on one of the
+   PSRAM-backed reader tasks. */
+static void reader_flush_pending_nvs(void)
+{
+    if (reader_preferences_save_requested) {
+        reader_preferences_save_requested = false;
+        reader_save_preferences();
+        puts("PREFERENCES saved by internal task");
+    }
+    if (reader_position_save_requested) {
+        char path[sizeof(reader_pending_position_path)];
+        strlcpy(path, reader_pending_position_path, sizeof(path));
+        uint32_t section = reader_pending_section;
+        uint32_t offset = reader_pending_offset;
+        reader_position_save_requested = false;
+        char section_key[16], offset_key[16];
+        reader_section_key_for(path, section_key);
+        reader_offset_key_for(path, offset_key);
+        (void)nvs_set_u32(reader_prefs, section_key, section);
+        (void)nvs_set_u32(reader_prefs, offset_key, offset);
+        (void)nvs_commit(reader_prefs);
+        printf("POSITION_SAVED section=%u text_offset=%u\n",
+               (unsigned)section + 1, (unsigned)offset);
+    }
+    if (reader_lastbook_save_requested) {
+        char name[sizeof(reader_pending_lastbook)];
+        strlcpy(name, reader_pending_lastbook, sizeof(name));
+        reader_lastbook_save_requested = false;
+        (void)nvs_set_str(reader_prefs, "lastbook", name);
+        (void)nvs_commit(reader_prefs);
+        printf("LASTBOOK_SAVED name=%s\n", name);
+    }
 }
 
 static void reader_load_preferences(void)
@@ -1653,24 +1730,24 @@ static uint32_t reader_path_hash(const char *path)
     return hash;
 }
 
-static void reader_section_key(char key[16])
+static void reader_section_key_for(const char *path, char key[16])
 {
-    snprintf(key, 16, "pos%08x", (unsigned)reader_path_hash(reader_selected_path));
+    snprintf(key, 16, "pos%08x", (unsigned)reader_path_hash(path));
 }
 
-static void reader_offset_key(char key[16])
+static void reader_offset_key_for(const char *path, char key[16])
 {
-    snprintf(key, 16, "off%08x", (unsigned)reader_path_hash(reader_selected_path));
+    snprintf(key, 16, "off%08x", (unsigned)reader_path_hash(path));
 }
 
 static void reader_save_section(void)
 {
     if (!reader_prefs || !reader_selected_path[0]) return;
-    char key[16]; reader_section_key(key);
-    (void)nvs_set_u32(reader_prefs, key, (uint32_t)reader_section_index);
-    reader_offset_key(key);
-    (void)nvs_set_u32(reader_prefs, key, reader_saved_text_offset);
-    (void)nvs_commit(reader_prefs);
+    strlcpy(reader_pending_position_path, reader_selected_path,
+            sizeof(reader_pending_position_path));
+    reader_pending_section = (uint32_t)reader_section_index;
+    reader_pending_offset = reader_saved_text_offset;
+    reader_position_save_requested = true;
 }
 
 static size_t reader_position_text_offset(void)
@@ -1710,26 +1787,39 @@ static void reader_save_position(void)
     size_t absolute = reader_stream_base_absolute
         + (relative - reader_section_base_offset);
     reader_map_absolute_position(absolute);
-    char section_key[16], offset_key[16];
-    reader_section_key(section_key); reader_offset_key(offset_key);
-    (void)nvs_set_u32(reader_prefs, section_key,
-                      (uint32_t)reader_section_index);
-    (void)nvs_set_u32(reader_prefs, offset_key, reader_saved_text_offset);
-    (void)nvs_commit(reader_prefs);
-    printf("POSITION_SAVED section=%u text_offset=%u\n",
+    strlcpy(reader_pending_position_path, reader_selected_path,
+            sizeof(reader_pending_position_path));
+    reader_pending_section = (uint32_t)reader_section_index;
+    reader_pending_offset = reader_saved_text_offset;
+    reader_position_save_requested = true;
+    printf("POSITION_QUEUED section=%u text_offset=%u\n",
            (unsigned)reader_section_index + 1,
            (unsigned)reader_saved_text_offset);
 }
 
-static void reader_read_saved_section(void)
+static void reader_read_saved_section_nvs(const char *path,
+                                          uint32_t *section,
+                                          uint32_t *offset)
 {
-    reader_saved_section = 0;
-    reader_saved_text_offset = 0;
-    if (!reader_prefs || !reader_selected_path[0]) return;
-    char key[16]; reader_section_key(key);
-    (void)nvs_get_u32(reader_prefs, key, &reader_saved_section);
-    reader_offset_key(key);
-    (void)nvs_get_u32(reader_prefs, key, &reader_saved_text_offset);
+    *section = 0;
+    *offset = 0;
+    if (!reader_prefs || !path[0]) return;
+    char key[16]; reader_section_key_for(path, key);
+    (void)nvs_get_u32(reader_prefs, key, section);
+    reader_offset_key_for(path, key);
+    (void)nvs_get_u32(reader_prefs, key, offset);
+}
+
+static void reader_request_saved_section(void)
+{
+    strlcpy(reader_pending_read_path, reader_selected_path,
+            sizeof(reader_pending_read_path));
+    reader_position_read_done = false;
+    reader_position_read_requested = true;
+    while (!reader_position_read_done)
+        vTaskDelay(pdMS_TO_TICKS(5));
+    reader_saved_section = reader_pending_read_section;
+    reader_saved_text_offset = reader_pending_read_offset;
 }
 
 static void reader_select_section_text(void)
@@ -1740,7 +1830,7 @@ static void reader_select_section_text(void)
         ? reader_saved_text_offset : 0;
     reader_stream_base_absolute = section->text_offset
         + reader_section_base_offset;
-    reader_book_text = reader_document.text + reader_stream_base_absolute;
+    reader_book_text = NULL;
     /* Stream continuously from the chosen section through the end of the
        document. Section boundaries remain available for paused navigation,
        but no longer create a six-second synthesis gap during linear reading. */
@@ -1770,6 +1860,7 @@ static void reader_move_section(int direction)
     reader_saved_text_offset = 0;
     reader_save_section();
     reader_section_change_pending = true;
+    reader_quick_start = true;
     reader_section_announcement = false;
     reader_loaded = false;
     reader_pcm_valid = false;
@@ -1858,6 +1949,7 @@ static void reader_move_marker(int direction, epub_marker_type_t type)
     reader_map_absolute_position(marker->text_offset);
     reader_save_section();
     reader_section_change_pending = true;
+    reader_quick_start = true;
     reader_section_announcement = false;
     reader_loaded = false;
     reader_pcm_valid = false;
@@ -2019,7 +2111,7 @@ static void reader_toggle_dictionary_commands(void)
     reader_render_abort = true;
     reader_loaded = false;
     reader_pcm_valid = false;
-    reader_save_preferences();
+    reader_schedule_preferences_save();
     snprintf(reader_announcement, sizeof(reader_announcement),
              "dictionary voice commands. %s",
              reader_dictionary_commands ? "on" : "off");
@@ -2032,7 +2124,7 @@ static void reader_toggle_substitutions(void)
     reader_render_abort = true;
     reader_loaded = false;
     reader_pcm_valid = false;
-    reader_save_preferences();
+    reader_schedule_preferences_save();
     snprintf(reader_announcement, sizeof(reader_announcement),
              "substitution dictionary. %s",
              reader_substitutions_enabled ? "on" : "off");
@@ -2042,7 +2134,7 @@ static void reader_toggle_substitutions(void)
 static void reader_toggle_interface_sounds(void)
 {
     reader_interface_sounds = !reader_interface_sounds;
-    reader_save_preferences();
+    reader_schedule_preferences_save();
     snprintf(reader_announcement, sizeof(reader_announcement),
              "interface sounds. %s",
              reader_interface_sounds ? "on" : "off");
@@ -2052,7 +2144,7 @@ static void reader_toggle_interface_sounds(void)
 static void reader_toggle_remaining_scope(void)
 {
     reader_remaining_scope_section = !reader_remaining_scope_section;
-    reader_save_preferences();
+    reader_schedule_preferences_save();
     snprintf(reader_announcement, sizeof(reader_announcement),
              "time remaining. %s",
              reader_remaining_scope_section ? "current section"
@@ -2103,7 +2195,7 @@ static void reader_toggle_status_item(void)
 {
     unsigned field = reader_status_order[reader_status_menu_index];
     reader_status_enabled ^= 1U << field;
-    reader_save_preferences();
+    reader_schedule_preferences_save();
     reader_speak_status_menu_item();
 }
 
@@ -2127,14 +2219,14 @@ static void reader_move_status_item(int direction)
     reader_status_order[reader_status_menu_index] = reader_status_order[other];
     reader_status_order[other] = item;
     reader_status_menu_index = other;
-    reader_save_preferences();
+    reader_schedule_preferences_save();
     reader_speak_status_menu_item();
 }
 
 static void reader_toggle_section_pause(void)
 {
     reader_pause_between_sections = !reader_pause_between_sections;
-    reader_save_preferences();
+    reader_schedule_preferences_save();
     snprintf(reader_announcement, sizeof(reader_announcement),
              "pause between sections. %s",
              reader_pause_between_sections ? "on" : "off");
@@ -2144,7 +2236,7 @@ static void reader_toggle_section_pause(void)
 static void reader_toggle_startup(void)
 {
     reader_startup_resume = !reader_startup_resume;
-    reader_save_preferences();
+    reader_schedule_preferences_save();
     snprintf(reader_announcement, sizeof(reader_announcement),
              "on startup. %s",
              reader_startup_resume ? "resume reading" : "library");
@@ -2172,7 +2264,7 @@ static void reader_change_sleep_timer(int direction)
     reader_sleep_timer_choice = (uint8_t)choice;
     if (!reader_sleep_timer_choice)
         reader_sleep_timer_active = false;
-    reader_save_preferences();
+    reader_schedule_preferences_save();
     reader_speak_menu_item();
 }
 
@@ -2193,14 +2285,14 @@ static void reader_start_sleep_timer(void)
 static void reader_toggle_sleep_key_reset(void)
 {
     reader_sleep_timer_reset_on_key = !reader_sleep_timer_reset_on_key;
-    reader_save_preferences();
+    reader_schedule_preferences_save();
     reader_speak_menu_item();
 }
 
 static void reader_toggle_sleep_start_on_boot(void)
 {
     reader_sleep_timer_start_on_boot = !reader_sleep_timer_start_on_boot;
-    reader_save_preferences();
+    reader_schedule_preferences_save();
     reader_speak_menu_item();
 }
 
@@ -2890,7 +2982,14 @@ static void reader_button_scan_task(void *argument)
                      && (stable_key == 1 || stable_key == 2 || stable_key == 3
                          || stable_key == 4 || stable_key == 5))
                 && !(!reader_paused && !reader_library && !reader_menu
-                     && (stable_key == 2 || stable_key == 4))) {
+                     && (stable_key == 2 || stable_key == 4))
+                /* Status is deliberately replaceable.  Do not throw away
+                   rapid Down presses merely because the previous value is
+                   still being spoken; queue_audio() aborts and overwrites it
+                   with the newly selected value. */
+                && !(!reader_library && !reader_menu && reader_paused
+                     && (stable_key == 1 || stable_key == 3
+                         || stable_key == 4 || stable_key == 5))) {
                 suppressed_press = true;
                 if (stable_key == 1)
                     centre_hold_handled = true;
@@ -2917,7 +3016,7 @@ static void reader_button_scan_task(void *argument)
                     if (reader_volume < 10) reader_volume += 2;
                     else if (reader_volume < 100) reader_volume += 5;
                     if (reader_volume > 100) reader_volume = 100;
-                    reader_save_preferences();
+                    reader_schedule_preferences_save();
                     printf("READER volume_up=%d\n", reader_volume);
                 }
             } else if (stable_key == 3) {
@@ -3026,13 +3125,14 @@ static void reader_button_scan_task(void *argument)
                 } else if (reader_library) {
                     library_announcement_pending = false;
                     if (reader_library_count) {
-                        (void)nvs_set_str(reader_prefs, "lastbook",
-                            reader_library_names[reader_library_index]);
-                        (void)nvs_commit(reader_prefs);
+                        strlcpy(reader_pending_lastbook,
+                                reader_library_names[reader_library_index],
+                                sizeof(reader_pending_lastbook));
+                        reader_lastbook_save_requested = true;
                         snprintf(reader_selected_path,
                                  sizeof(reader_selected_path), "/sdcard/%s",
                                  reader_library_names[reader_library_index]);
-                        reader_read_saved_section();
+                        reader_request_saved_section();
                         reader_open_pending = true;
                         reader_started = true;
                         reader_finished = false;
@@ -3127,7 +3227,7 @@ static void reader_button_scan_task(void *argument)
                 if (!reader_paused) {
                     if (reader_volume > 10) reader_volume -= 5;
                     else if (reader_volume > 2) reader_volume -= 2;
-                    reader_save_preferences();
+                    reader_schedule_preferences_save();
                     printf("READER volume=%d\n", reader_volume);
                     continue;
                 }
@@ -3247,13 +3347,15 @@ static void reader_button_scan_task(void *argument)
                 queue_audio(AUDIO_SPEECH, reader_announcement);
             }
         }
-        if (reader_preferences_dirty && !reader_menu_announcement_pending
+        if (reader_preferences_dirty && reader_paused
+            && !reader_rendering && !reader_play_task_running
+            && !reader_menu_announcement_pending
             && !reader_ui_busy
             && xTaskGetTickCount() - reader_preferences_changed_at
                    >= pdMS_TO_TICKS(1000)) {
             reader_preferences_dirty = false;
-            reader_save_preferences();
-            puts("PREFERENCES saved after input burst");
+            reader_preferences_save_requested = true;
+            puts("PREFERENCES queued after input burst");
         }
         if (reader_sleep_timer_active
             && (int32_t)(xTaskGetTickCount()
@@ -3548,8 +3650,9 @@ static void reader_engine_task(void *arg)
             }
             if (reader_open_pending) {
                 epub_free_document(&reader_document);
-                esp_err_t open_result = epub_load_document(
-                    reader_selected_path, &reader_document);
+                esp_err_t open_result = epub_load_document_at(
+                    reader_selected_path, reader_saved_section,
+                    &reader_document);
                 if (open_result != ESP_OK) {
                     ESP_LOGE(TAG, "EPUB open failed: %s",
                              esp_err_to_name(open_result));
@@ -3572,12 +3675,16 @@ static void reader_engine_task(void *arg)
                 reader_select_section_text();
                 reader_open_pending = false;
                 reader_library = false;
-                printf("EPUB_READY title=%s text_bytes=%u sections=%u markers=%u truncated=%d\n",
+                printf("EPUB_READY title=%s text_bytes=%u sections=%u markers=%u words=%llu cache_complete=%d truncated=%d\n",
                        reader_document.title,
                        (unsigned)reader_document.text_length,
                        (unsigned)reader_document.section_count,
                        (unsigned)reader_document.marker_count,
+                       (unsigned long long)reader_document.word_count,
+                       reader_document.cache_complete ? 1 : 0,
                        reader_document.truncated ? 1 : 0);
+                if (reader_document.index_rebuilt)
+                    puts("BOOK_INDEX_READY cache published");
             }
             if (reader_section_announcement) {
                 reader_section_announcement = false;
@@ -3610,6 +3717,9 @@ static void reader_engine_task(void *arg)
                 reader_opening_tone_stop = true;
                 continue;
             }
+            unsigned completed_start_target_ms = reader_quick_start
+                ? NAVIGATION_START_MS : ROLLING_START_MS;
+            reader_quick_start = false;
             reader_opening_tone_stop = true;
             while (reader_opening_tone_running)
                 vTaskDelay(pdMS_TO_TICKS(5));
@@ -3619,7 +3729,7 @@ static void reader_engine_task(void *arg)
                    (unsigned)((ready_us - opening_started_us) / 1000),
                    (unsigned)((ready_us - synthesis_started_us) / 1000),
                    (unsigned)((ready_us - load_started_us) / 1000),
-                   ROLLING_START_MS);
+                   completed_start_target_ms);
             puts("BOOK ready");
             if (reader_resume_after_load) {
                 reader_resume_after_load = false;
@@ -3640,6 +3750,10 @@ static void reader_engine_task(void *arg)
             ESP_ERROR_CHECK(vc_setVoiceParam(instance, 0, VOICE_SPEED,
                                              reader_rate)
                                 ? ESP_OK : ESP_FAIL);
+            if (reader_interface_sounds)
+                (void)play_wav_tone_limited(keypress_wav_start,
+                                            keypress_wav_end,
+                                            event.generation, 80);
             (void)reader_speak_buffered(instance, event.text,
                                         event.generation);
             reader_ui_busy = false;
@@ -3754,7 +3868,9 @@ static bool reader_resume_last_book(void)
         reader_library_index = i;
         snprintf(reader_selected_path, sizeof(reader_selected_path),
                  "/sdcard/%s", last_book);
-        reader_read_saved_section();
+        reader_read_saved_section_nvs(reader_selected_path,
+                                      &reader_saved_section,
+                                      &reader_saved_text_offset);
         reader_open_pending = true;
         reader_started = true;
         reader_finished = false;
@@ -3887,9 +4003,9 @@ void app_main(void)
     printf("BOOT_STAGE engine_ms=%u\n",
            (unsigned)((esp_timer_get_time() - boot_started_us) / 1000));
 
-    BaseType_t buttons_created = xTaskCreate(reader_button_scan_task,
-                                              "reader_buttons", 4096,
-                                              &buttons, 5, NULL);
+    BaseType_t buttons_created = xTaskCreateWithCaps(
+        reader_button_scan_task, "reader_buttons", 4096,
+        &buttons, 5, NULL, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     ESP_ERROR_CHECK(buttons_created == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
     if (library_result == ESP_OK) {
         if (!reader_resume_last_book())
@@ -3902,7 +4018,23 @@ void app_main(void)
     }
     printf("BOOT_STAGE request_ms=%u\n",
            (unsigned)((esp_timer_get_time() - boot_started_us) / 1000));
-    for (;;)
-        vTaskDelay(portMAX_DELAY);
+    for (;;) {
+        if (reader_position_read_requested && reader_paused
+            && !reader_rendering && !reader_play_task_running
+            && !reader_ui_busy) {
+            reader_read_saved_section_nvs(reader_pending_read_path,
+                                          &reader_pending_read_section,
+                                          &reader_pending_read_offset);
+            reader_position_read_requested = false;
+            reader_position_read_done = true;
+        }
+        if ((reader_preferences_save_requested
+             || reader_position_save_requested
+             || reader_lastbook_save_requested)
+            && reader_paused && !reader_rendering
+            && !reader_play_task_running && !reader_ui_busy)
+            reader_flush_pending_nvs();
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
 }
 #endif

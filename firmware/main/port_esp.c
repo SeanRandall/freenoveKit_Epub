@@ -7,6 +7,7 @@
 #include "freertos/task.h"
 #include "freertos/idf_additions.h"
 #include "esp_timer.h"
+#include "esp_heap_caps.h"
 
 #include "evv_port.h"
 #include "evv_arena.h"
@@ -15,8 +16,19 @@
 #define EVV_TASK_PRIORITY 5
 #define EVV_MIN_STACK 4096
 
-struct evv_sem { SemaphoreHandle_t handle; };
-struct evv_event { EventGroupHandle_t handle; };
+/* OpenEVV keeps dozens of synchronization objects alive. Dynamic FreeRTOS
+   objects always draw their control blocks from internal RAM, exhausting the
+   ESP32-S3 heap even though several MB of PSRAM remain. These objects are
+   task-only (never touched by an ISR), so keep both their wrappers and static
+   FreeRTOS storage in PSRAM. */
+struct evv_sem {
+    StaticSemaphore_t storage;
+    SemaphoreHandle_t handle;
+};
+struct evv_event {
+    StaticEventGroup_t storage;
+    EventGroupHandle_t handle;
+};
 struct evv_task { TaskHandle_t handle; };
 
 struct evv_start {
@@ -41,12 +53,22 @@ evv_sem *evv_sem_create(int initial, int most)
 
     if (initial < 0 || (UBaseType_t)initial > limit)
         return NULL;
-    s = malloc(sizeof *s);
-    if (s == NULL)
+    s = heap_caps_malloc(sizeof *s, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (s == NULL) {
+        printf("EVV_SEM_ALLOC_FAIL stage=wrapper internal=%u largest=%u psram=%u\n",
+               (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+               (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+               (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
         return NULL;
-    s->handle = xSemaphoreCreateCounting(limit, (UBaseType_t)initial);
+    }
+    s->handle = xSemaphoreCreateCountingStatic(
+        limit, (UBaseType_t)initial, &s->storage);
     if (s->handle == NULL) {
-        free(s);
+        printf("EVV_SEM_ALLOC_FAIL stage=freertos internal=%u largest=%u psram=%u\n",
+               (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+               (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+               (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+        heap_caps_free(s);
         return NULL;
     }
     return s;
@@ -56,7 +78,7 @@ void evv_sem_destroy(evv_sem *s)
 {
     if (s != NULL) {
         vSemaphoreDelete(s->handle);
-        free(s);
+        heap_caps_free(s);
     }
 }
 
@@ -83,12 +105,13 @@ int evv_sem_post(evv_sem *s, int n)
 
 evv_event *evv_event_create(int signalled)
 {
-    evv_event *e = malloc(sizeof *e);
+    evv_event *e = heap_caps_malloc(sizeof *e,
+                                    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (e == NULL)
         return NULL;
-    e->handle = xEventGroupCreate();
+    e->handle = xEventGroupCreateStatic(&e->storage);
     if (e->handle == NULL) {
-        free(e);
+        heap_caps_free(e);
         return NULL;
     }
     if (signalled)
@@ -100,7 +123,7 @@ void evv_event_destroy(evv_event *e)
 {
     if (e != NULL) {
         vEventGroupDelete(e->handle);
-        free(e);
+        heap_caps_free(e);
     }
 }
 
