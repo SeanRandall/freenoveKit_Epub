@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EVV Reader Guide</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <nav aria-label="Documentation">
+      <a href="index.html">Firmware installer</a> |
+      <a href="reader-guide.html">Reader guide</a> |
+      <a href="physical-description.html">Physical description</a>
+    </nav>
+<h1>EVV Reader Guide</h1>
+<p>This alpha firmware turns the Freenove Media Kit for ESP32-S3 into a speech-first ePub book reader.</p>
+<h2>What is the Freenove Media Kit?</h2>
+<p>The Freenove Media Kit is a small kit of components for people to play with and learn to code. it&#x27;s basically an ESP32 room board (which has a processor and on-board memory, Wifi and Bluetooth radios, a Micro SD card slot and a USB port), connected to a &quot;media shield&quot; (providing a screen, headphone jack and speaker, and little keypad). These components are sandwiched together in a 3d printed case and are sold for hobbyests or students to learn coding or to make fun things. My fun thing was to be able to carry around something that sounds like eloquence in a device smaller than a pack of cards and read me ebooks.</p>
+<h2>Physical description</h2>
+<p>Hold the unit with the screen at the top and the USB-C connector at the bottom. You&#x27;ll find a headphone jack on the top right of the unit and feel the navigation stick slightly below and to the right-of-centre from the screen. You&#x27;ll also feel a protruding antenna poking out at the top, directly in front of which sits the Micro SD card slot.</p>
+<p>There is a power button at about 8 o&#x27;clock of the navigation stick. This button is not prominent, but it is a battery hardware cutout and will cause the unit to immediately lose power if pressed (unless you&#x27;re powering it with a cable). This button *cannot* be captured as part of the keypad lock.</p>
+<p>Similarly, on the back of the kit are 2 buttons, the right one of which is an immediate hard reset button. The standard case that Freenove ship exposes this button quite easily, so be cautious when operating the navigation stick if pressing the back of the kit down onto a hard surface. Eventually you&#x27;ll be able to 3d print (or buy) a replacement back that fixes this.</p>
+<p>the only control on the face of the unit is the navigation stick. It can be pressed &quot;inward&quot; (which we call centre), or in any of an up, right, down or leftward direction.</p>
+<h2>The library</h2>
+<p>Powering the Kit with the firmware installed loads the library by default. Here, pressing:</p>
+<ul>
+<li>Up and down move through files and folders.</li>
+<li>Left returns to the containing folder.</li>
+<li>Centre opens the selected item.</li>
+<li>Repeated presses of Right describe a file and offer file actions.</li>
+<li>Hold Up to open settings.</li>
+<li>Hold Left returns to the previously loaded reading.</li>
+</ul>
+<p>The reader currently supports EPUB and plain-text books, MP3 audio, and M4B or M4A audiobooks. Recently opened items can appear at the top of the library if the setting is enabled in the menu.</p>
+<h2>Reading EPUB and plain text</h2>
+<p>Pressing select on a file opens it for reading. From here:</p>
+<ul>
+<li>Centre pauses or resumes.</li>
+<li>Hold Centre locks or unlocks the keypad.</li>
+<li>Hold Left opens the library and Hold Up opens settings.</li>
+</ul>
+<p>While paused, Up cycles the navigation unit. Left and Right move through the selected unit. EPUB navigation includes sections and headings. Plain-text navigation includes sentences, paragraphs, pages when form-feed page breaks exist, and a narrowing percentage search. During a narrowing search the reader announces the jump and starts reading around the new position.</p>
+<p>Down moves through enabled status announcements. Hold Right begins a recording; the next button press stops and saves it. While playing, up and down adjusts volume.</p>
+<h2>Playing audio</h2>
+<ul>
+<li>Up and down adjust volume.</li>
+<li>Centre pauses or resumes.</li>
+<li>Left and Right seek and immediately continue playback.</li>
+<li>Up cycles through 30 seconds, one minute, five minutes, and a narrowing search; M4B files also offer chapter navigation. The narrowing search begins with half the file and halves the jump after every move.</li>
+</ul>
+<p>Down moves through the same enabled status announcements used by book reading.</p>
+<h2>Settings</h2>
+<ul>
+<li>Up and Down move through the menu in either direction.</li>
+<li>Left and Right change the focused setting.</li>
+<li>Centre activates an action or toggles a setting.</li>
+<li>Hold Up closes the menu and returns to the interface from which it was opened.</li>
+</ul>
+<p>Playing-screen status items opens a submenu. You can move through these with up or down, toggle them on or off with Centre and Left or Right rearrange the announcement order.</p>
+<p>Network modes appear only when their corresponding configuration files are present on the SD card.</p>
+<h3>settings</h3>
+<ul>
+<li>Sleep timer: determines for how long the unit will speak or play a file. choose between 5 to 90 minutse.</li>
+<li>Speaking Rate and volume are used to adjust the speed and volume of the voice. These will eventually be added to with more voice choices and a variety of other options depending on which speech engine you have chosen to use.</li>
+<li>Clock: this lets you set the time from wifi (the kit reboots post clock setting) or by hand. The time is lost if the unit fully loses power, as it does whenever it restarts or the USB power is removed without a battery connected. Activating the file transfer mode also sets the clock. The current time is available as a status item whilst paused or on device unlock.</li>
+<li>sort files by: determines the order of files on the SD card.</li>
+<li>Pause between sections: determine if the reader &quot;keeps going&quot; to the end of a book, or waits for you to press play at the end of a section (which is usually a fiction-book&#x27;s chapter).</li>
+<li>On startup: Determines whether you are returned to your library or the current file is resumed when the kit is powered.</li>
+<li>Unlock Action: determines what happens when you unlock the unit from sleep by holding the centre key.</li>
+<li>Recent files: determines whether a list of recently opened files is maintained. If on, this is always placed at the top of the library, regardless of the sort order above.</li>
+<li>Book opening: Determines how files are read. in &quot;Indexed&quot; mode, a book is processed before reading starts, so you are immediately able to see how long it is, jump to a particular section and so forth. This takes more time, depending on the size of the book. In &quot;instant&quot; mode, the book is started reading immediately and the index is built when you pause playback, but you won&#x27;t know how far through the book you are, be able to navigate passed a section more than 1 forward from the one you are reading at a time, nor look at the book&#x27;s structure until the index has finished generating. If you leave an instant book open and paused, you&#x27;ll hear a sound when the generation is complete.</li>
+<li>Playing screen status items. This is a toggleable list of what you hear when pressing down on the navigation stick whilst a file is paused.  You can choose to not hear an item by pressing select on it, and to hear an item earlier or later in sequence by moving it left or right.</li>
+<li>Interface sounds: determines whether you hear beeps while the unit is doing things. There are noises to indicate a book is being processed, when you&#x27;ve moved between the library, reader and menu, and when recording has started and stopped.</li>
+<li>Keypress resets sleep timer: This determines whether your sleep timer is contiguous, which is the default, or whether pressing a button restarts it. In other words, do you want a 30 minute sleep timer regardless, or 30 minutes of uninterrupted listening. If this is turned on, the timer starts again whenever you press something.</li>
+<li>Start sleep timer on boot: This determines whether your last sleep timer is restarted whenever the device turns on.</li>
+</ul>
+<h3>network modes: these appear near the bottom of the menu and can include File Transfer, NVDA Remote and Remsound. They only appear if they are configured for use.</h3>
+<ul>
+<li>Clear book Cache: this deletes all the metadata about books the reader has generated. You can do this yourself from the SD card, with the caveat that it will mean longer opening times for books you had already processed.</li>
+</ul>
+<h2>Network modes</h2>
+<h3>File transfer</h3>
+<p>File transfer uses the Wi-Fi details in &quot;.evv/WIFI.INI&quot; and starts a local WebDAV server. Its local name is EVV followed by four hexadecimal characters. Hold Centre deliberately to leave transfer mode and return to the library.</p>
+<h3>NVDA Remote and RemSound</h3>
+<p>NVDA Remote listens for speech sent through the server configured in &quot;.evv/nvdaremote.ini&quot;. RemSound uses &quot;.evv/remsound.ini&quot;. These modes are hidden if their configuration files are absent.</p>
+<h3>Configuration and privacy</h3>
+<p>Wi-Fi and remote-service details belong in the hidden &quot;.evv&quot; directory on the SD card. They are not built into public firmware. File transfer has no authentication and should only be used on a trusted private network.</p>
+<h2>Alpha limitations</h2>
+<p>This is test software. Keep backup copies of books and recordings. A large EPUB can take a considerable time to index on first opening; its extracted reading data is then cached on the SD card. Please report the action being performed, the spoken message, and whether the unit recovered after reset when describing a fault.</p>
+  </main>
+</body>
+</html>

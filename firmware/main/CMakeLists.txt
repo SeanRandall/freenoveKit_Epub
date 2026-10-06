@@ -42,33 +42,51 @@ file(WRITE "${LANGUAGE_BINDING_SOURCE}"
 set(APP_REQUIREMENTS
     esp_timer esp_psram esp_driver_i2s esp_adc nvs_flash esp_wifi
     esp_event esp_netif esp_http_server fatfs sdmmc mdns app_update
-    esp-tls mbedtls lwip esp_driver_tsens)
+    esp-tls mbedtls lwip esp_driver_tsens esp_audio_codec)
 message(STATUS "Firmware source ${EVV_APP_SOURCE}; requirements ${APP_REQUIREMENTS}")
 
+# Dropbox may leave the historic network entry point as an inaccessible
+# placeholder.  Keep the public build argument stable while compiling the
+# locally maintained network-services entry point.
+set(APP_ENTRY_SOURCE "${EVV_APP_SOURCE}")
+if("${EVV_APP_SOURCE}" STREQUAL "webdav_transfer_main.c")
+    set(APP_ENTRY_SOURCE "network_services_main.c")
+endif()
+
+set(APP_SOURCES
+    "${APP_ENTRY_SOURCE}"
+    "transfer_mode.c"
+    "epub_text.c"
+    "${LANGUAGE_BINDING_SOURCE}"
+    "port_esp.c"
+    ${ENGINE_SOURCES}
+    ${LANGUAGE_SOURCES}
+    ${COMPILED_RULE_SOURCES})
+set(APP_EMBED_FILES
+    "../tones/UI.wav"
+    "../tones/keypress.wav"
+    "../tones/opening book.wav"
+    "../tones/locked.wav"
+    "../tones/unlocked.wav"
+    "../tones/volume-minimum.wav"
+    "../tones/volume-maximum.wav"
+    "../tones/recording-started.wav"
+    "../tones/recording-stopped.wav")
+
+if("${EVV_APP_SOURCE}" STREQUAL "webdav_transfer_main.c")
+    list(APPEND APP_SOURCES "remsound_receiver.c" "remsound_numbers.c")
+    file(GLOB REMSOUND_WAVS RELATIVE "${CMAKE_CURRENT_LIST_DIR}"
+         "${CMAKE_CURRENT_LIST_DIR}/../tones/remsound/*.wav")
+    list(APPEND APP_EMBED_FILES ${REMSOUND_WAVS})
+endif()
+
 idf_component_register(
-    SRCS
-        "${EVV_APP_SOURCE}"
-        "transfer_mode.c"
-        "epub_text.c"
-        "${LANGUAGE_BINDING_SOURCE}"
-        "port_esp.c"
-        ${ENGINE_SOURCES}
-        ${LANGUAGE_SOURCES}
-        ${COMPILED_RULE_SOURCES}
+    SRCS ${APP_SOURCES}
     INCLUDE_DIRS
         "${OPENEVV}/src"
         "${OPENEVV}/lang/${EVV_LANGUAGE}"
     REQUIRES ${APP_REQUIREMENTS}
-    EMBED_FILES
-        "../tones/UI.wav"
-        "../tones/keypress.wav"
-        "../tones/opening book.wav"
-        "../tones/locked.wav"
-        "../tones/unlocked.wav"
-        "../tones/volume-minimum.wav"
-        "../tones/volume-maximum.wav"
-        "../tones/recording-started.wav"
-        "../tones/recording-stopped.wav"
+    EMBED_FILES ${APP_EMBED_FILES}
 )
 
 target_compile_options(${COMPONENT_LIB} PRIVATE

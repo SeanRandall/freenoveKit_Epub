@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Install EVV Reader</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <h1>Install EVV Reader</h1>
+    <p>Connect the 1.14-inch Freenove Media Kit with a data-capable USB cable. This installer requires Chrome or Edge and a secure web page.</p>
+    <fieldset>
+      <legend>Voice language</legend>
+      <label><input type="radio" name="language" value="en-US" checked> US English</label>
+      <label><input type="radio" name="language" value="en-GB"> British English</label>
+      <label><input type="radio" name="language" value="fr-FR"> French voice, English interface</label>
+    </fieldset>
+    <button id="install">Connect and install</button>
+    <progress id="progress" max="100" value="0"></progress>
+    <p id="device"><strong>Device:</strong> not connected</p>
+    <p id="status" role="status" aria-live="polite">Ready.</p>
+    <details><summary>Troubleshooting</summary><p>If connection fails, hold BOOT, briefly press RESET, release BOOT, then try again. Flashing does not alter the SD card.</p></details>
+    <h2>Documentation</h2>
+    <ul>
+      <li><a href="reader-guide.html">EVV Reader guide</a></li>
+      <li><a href="physical-description.html">Freenove kit physical description</a></li>
+    </ul>
+  </main>
+  <script type="module" src="installer.js"></script>
+</body>
+</html>

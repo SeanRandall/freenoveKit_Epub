@@ -41,12 +41,56 @@ static sdmmc_card_t *card;
 static bool owns_card_mount;
 static esp_netif_t *station_netif;
 static int reconnect_attempts;
+static bool station_static_ip;
+
+typedef enum {
+    REMSOUND_ADDRESS_DHCP,
+    REMSOUND_ADDRESS_STATIC,
+    REMSOUND_ADDRESS_INVALID,
+} remsound_address_mode_t;
 
 static void trim_line_end(char *value)
 {
     size_t length = strlen(value);
     while (length && (value[length - 1] == '\r' || value[length - 1] == '\n'))
         value[--length] = 0;
+}
+
+static remsound_address_mode_t read_remsound_address(
+    esp_netif_ip_info_t *address)
+{
+    static const char *const paths[] = {
+        CARD_ROOT "/.evv/remsound.ini",
+        CARD_ROOT "/.evv/REMSOUND.INI",
+    };
+    FILE *file = NULL;
+    for (size_t i = 0; i < sizeof(paths) / sizeof(paths[0]); ++i) {
+        file = fopen(paths[i], "rb");
+        if (file) break;
+    }
+    if (!file) return REMSOUND_ADDRESS_DHCP;
+
+    char player_ip[16] = { 0 }, gateway[16] = { 0 }, netmask[16] = { 0 };
+    char line[160];
+    while (fgets(line, sizeof(line), file)) {
+        trim_line_end(line);
+        if (!strncmp(line, "player_ip=", 10))
+            strlcpy(player_ip, line + 10, sizeof(player_ip));
+        else if (!strncmp(line, "gateway=", 8))
+            strlcpy(gateway, line + 8, sizeof(gateway));
+        else if (!strncmp(line, "netmask=", 8))
+            strlcpy(netmask, line + 8, sizeof(netmask));
+    }
+    fclose(file);
+    if (!player_ip[0] || !strcasecmp(player_ip, "dhcp"))
+        return REMSOUND_ADDRESS_DHCP;
+    memset(address, 0, sizeof(*address));
+    if (inet_pton(AF_INET, player_ip, &address->ip) != 1
+        || inet_pton(AF_INET, gateway, &address->gw) != 1
+        || inet_pton(AF_INET, netmask, &address->netmask) != 1
+        || address->ip.addr == 0 || address->netmask.addr == 0)
+        return REMSOUND_ADDRESS_INVALID;
+    return REMSOUND_ADDRESS_STATIC;
 }
 
 static bool read_wifi_config_file(const char *path, char *ssid,
@@ -93,15 +137,25 @@ static bool read_wifi_config(char *ssid, size_t ssid_size,
     return false;
 }
 
-static bool read_remote_mode_marker(void)
+typedef enum {
+    NETWORK_MODE_WEBDAV,
+    NETWORK_MODE_NVDA,
+    NETWORK_MODE_CLOCK,
+    NETWORK_MODE_REMSOUND,
+} network_mode_t;
+
+static network_mode_t read_network_mode_marker(void)
 {
     FILE *file = fopen(CARD_ROOT "/.evv/network.mode", "rb");
-    if (!file) return false;
+    if (!file) return NETWORK_MODE_WEBDAV;
     char mode[16] = { 0 };
-    bool remote = fgets(mode, sizeof(mode), file)
-                  && !strncasecmp(mode, "nvda", 4);
+    bool read = fgets(mode, sizeof(mode), file) != NULL;
     fclose(file);
-    return remote;
+    if (read && !strncasecmp(mode, "remsound", 8))
+        return NETWORK_MODE_REMSOUND;
+    if (read && !strncasecmp(mode, "nvda", 4)) return NETWORK_MODE_NVDA;
+    if (read && !strncasecmp(mode, "clock", 5)) return NETWORK_MODE_CLOCK;
+    return NETWORK_MODE_WEBDAV;
 }
 
 static void make_hostname(char hostname[8])
@@ -142,6 +196,10 @@ static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
             esp_wifi_connect();
         else
             xEventGroupSetBits(wifi_events, WIFI_FAILED);
+    } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_CONNECTED
+               && station_static_ip) {
+        reconnect_attempts = 0;
+        xEventGroupSetBits(wifi_events, WIFI_READY);
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         reconnect_attempts = 0;
         xEventGroupSetBits(wifi_events, WIFI_READY);
@@ -526,8 +584,11 @@ static esp_err_t transfer_mode_start_internal(const char *fallback_ssid,
         /* The OTA handoff takes two software resets; RTC scratch registers
            are not reliable across both on every board.  The reader therefore
            leaves the intended service on the card. */
-        status->remote_mode = read_remote_mode_marker();
-        start_webdav = !status->remote_mode;
+        network_mode_t mode = read_network_mode_marker();
+        status->remote_mode = mode == NETWORK_MODE_NVDA;
+        status->clock_mode = mode == NETWORK_MODE_CLOCK;
+        status->remsound_mode = mode == NETWORK_MODE_REMSOUND;
+        start_webdav = mode == NETWORK_MODE_WEBDAV;
     }
 
     char ssid[33] = { 0 };
@@ -552,6 +613,29 @@ static esp_err_t transfer_mode_start_internal(const char *fallback_ssid,
     ESP_RETURN_ON_ERROR(esp_netif_set_hostname(station_netif,
                                                 status->hostname), TAG,
                         "set hostname");
+    esp_netif_ip_info_t fixed = { 0 };
+    remsound_address_mode_t address_mode = status->remsound_mode
+        ? read_remsound_address(&fixed) : REMSOUND_ADDRESS_DHCP;
+    ESP_RETURN_ON_FALSE(address_mode != REMSOUND_ADDRESS_INVALID,
+                        ESP_ERR_INVALID_ARG, TAG,
+                        "invalid RemSound network configuration");
+    station_static_ip = address_mode == REMSOUND_ADDRESS_STATIC;
+    if (station_static_ip) {
+        ESP_RETURN_ON_ERROR(esp_netif_dhcpc_stop(station_netif), TAG,
+                            "stop DHCP client");
+        ESP_RETURN_ON_ERROR(esp_netif_set_ip_info(station_netif, &fixed), TAG,
+                            "set RemSound static IP");
+        esp_netif_dns_info_t dns = { 0 };
+        dns.ip.type = ESP_IPADDR_TYPE_V4;
+        dns.ip.u_addr.ip4.addr = fixed.gw.addr;
+        ESP_RETURN_ON_ERROR(esp_netif_set_dns_info(
+            station_netif, ESP_NETIF_DNS_MAIN, &dns), TAG,
+            "set RemSound DNS");
+        ESP_LOGI(TAG, "RemSound using static player address " IPSTR,
+                 IP2STR(&fixed.ip));
+    } else if (status->remsound_mode) {
+        ESP_LOGI(TAG, "RemSound player address will be assigned by DHCP");
+    }
     wifi_events = xEventGroupCreate();
     ESP_RETURN_ON_FALSE(wifi_events, ESP_ERR_NO_MEM, TAG, "Wi-Fi events");
     wifi_init_config_t wifi_init = WIFI_INIT_CONFIG_DEFAULT();
@@ -582,9 +666,10 @@ static esp_err_t transfer_mode_start_internal(const char *fallback_ssid,
 
     /* Keep the RTC useful after Wi-Fi is shut down.  Both WebDAV and NVDA
        Remote pass through here, so either online mode refreshes the clock. */
-    setenv("TZ", "GMT0BST,M3.5.0/1,M10.5.0/2", 1);
+    if (!getenv("TZ"))
+        setenv("TZ", "GMT0BST,M3.5.0/1,M10.5.0/2", 1);
     tzset();
-    if (time(NULL) < 1704067200 && !esp_sntp_enabled()) {
+    if (!esp_sntp_enabled()) {
         esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
         esp_sntp_setservername(0, "pool.ntp.org");
         esp_sntp_init();
@@ -696,4 +781,5 @@ void transfer_mode_stop(void)
         card = NULL;
     }
     owns_card_mount = false;
+    station_static_ip = false;
 }

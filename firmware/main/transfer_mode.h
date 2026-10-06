@@ -9,6 +9,8 @@ typedef struct {
     char hostname[8];
     bool credentials_from_sd;
     bool remote_mode;
+    bool clock_mode;
+    bool remsound_mode;
 } transfer_mode_status_t;
 
 /* Mounts the SD card, joins Wi-Fi, and exposes the complete card through
@@ -26,6 +28,7 @@ esp_err_t transfer_mode_start(const char *fallback_ssid,
 esp_err_t transfer_network_start(const char *fallback_ssid,
                                  const char *fallback_password,
                                  transfer_mode_status_t *status);
+
 
 /* Starts DAV on a card already mounted at /sdcard by the reader. */
 esp_err_t transfer_mode_start_mounted(const char *fallback_ssid,

@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Freenove kit physical description</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <nav aria-label="Documentation">
+      <a href="index.html">Firmware installer</a> |
+      <a href="reader-guide.html">Reader guide</a> |
+      <a href="physical-description.html">Physical description</a>
+    </nav>
+<h1>Freenove kit physical overview</h1>
+<p>This is a tactile descriptor of the Freenove FNK0102 board. I am working completely blind, so there could well be inaccuracies as I’ve had no visual assistance. The information herein is gathered from my own experiments, and there’s plenty of detail in <a href="https://docs.freenove.com/projects/fnk0102/en/latest/">Freenove’s official documentation pages</a>.</p>
+<h1>The assembled kit</h1>
+<p>My board arrived assembled, so we’ll go into the separate components after we’ve gone through the unit as a whole.</p>
+<p>The fully assembled unit consists of the ESP32 and extension board already clipped together, placed into the back of the housing base with the housing cover attached. The ESP32 board and the extension board are both metal, whereas both parts of the housing are 3D printed PLA (which is a plant-based plastic filament). So if you’re holding the assembled unit in your hand, you’ll feel the plastic on both the front and back. The “housing cover” is what Freenove call the front face of the unit(or lid of the box to my mind), and “housing base” is the back (or the box itself).</p>
+<h2>Front face</h2>
+<p>The front face of the kit contains a 1.14 inch screen, which takes up most of the space. Running along the left-hand edge is the Freenove wordmark and logo.</p>
+<p>Centrally and below the screen is the5-way Navigation Switch. TO the right of this is a microphone opening. TO the left, there is a column of another opening that might be an LED, a power button, and a raised printed power symbol. The  power button is inactive until a battery is connected.</p>
+<h2>Edges.</h2>
+<p>The top edge contains the 3.5MM (1/4 inch) headphone jack. There’s also an obvious metal protrusion toward the back of the top of the unit: this is the IPEX antenna. If you wiggle this bit of metal you may well feel some movement; this is the board moving within the plastic casing, not the separate components of the board moving, so don’t worry too much about unplanned motion here.  Immediately above the antenna is a very thin  slot for insertion or removal of the Micro SD card. I didn’t even notice this on first looking at the case and it takes a thin fingernail or tool for me to press this in and out reliably. The card’s notch faces upward, toward the headphone jack, and it’s one of those spring-loaded mechanisms where the card pushes firmly into place, and is then pushed slightly further in and springs back to release.</p>
+<p>The bottom edge contains access to one of the USB-C ports (for power and programming. This isn’t the native USB socket you’d use on the ESP32 to connect an OTG cable), which requires disassembly of the housing to reach.</p>
+<h2>The Back</h2>
+<p>The back of the case has another Freenove wordmark/logo along the left edge (with the unit in the upright position), as well as a prominent round aperture for the camera closer toward the top. Nearer the bottom are 2 buttons, the left boot and the right reset. Between these buttons are cutouts in the case to see the status of the LEDs. Keep in mind if you flip the unit over so its back is facing upward, reset becomes the left button.</p>
+<h1>The individual components</h1>
+<p>TO remove the board from the case, I find it easiest to place 2 fingers beneath the protruding antenna at the top of the unit and gently pull upward. The boards click out of position and you can then remove the housing cover from the front of the unit. The board is only sat in the housing, not screwed, so you’ll almost certainly feel it wiggle as you do this. Likewise, the cover is sat and clicked into place, so although the documentation is careful to advise you are gentle, you do need to apply a certain amount of pressure to close the unit back up.</p>
+<h2>The Cover</h2>
+<p>The housing cover (and the housing as a whole) is largely a shell with holes in it, for all practical purposes. With the cover removed you’ll feel the large rectangular hole for the screen, the cutout for the stick, microphone and  power button, as well as the openings for the headphone port and sD card on the top edge and the Freenove text along the left-hand side.</p>
+<h2>The Base</h2>
+<p>The base of the housing is a bit different because as well as cutouts for the USB-c port along the bottom, the boot and reset buttons on the underside and  the LEDs between them, it also contains a battery compartment. I missed this when I first felt inside the case but, if you look carefully, you’ll feel that although the board sits flush with the right wall of the case, the plastic to its left is a divider,  with a narrow empty trench running the length of the base.  This divider runs right from the top edge of the case downward and there is a small gap at the bottom for you to route the battery wires through.</p>
+<h2>The boards</h2>
+<p>The boards are effectively 2 components sandwiched together. The top one, the extension board, has the screen, navigation stick, power button, headphone jack and battery connector. This is a “media shield”, whereas the board underneath is the actual computer doing the work. This ESP32 board provides access to the    camera, Micro SD card slot, a pair of USB ports and  the reset and boot buttons. Of course it also has the physical components to do the work, such as the processor, RAM, Bluetooth/wifi radios and so forth. Both devices have various LEDs.</p>
+<p>The key things to find with the housing removed are:</p>
+<ul>
+<li>The battery connector: this is a 2pin JST socket. It feels like a little square hole on the left-hand side of the bottom edge of the extension board. The 2 silver pins inside take a black (negative) wire on the left and a red (positive) one on the right, assuming the board is upright.</li>
+</ul>
+<ul>
+<li>The Micro SD slot. This is on the top edge,  between the Ipex antenna sticking out of the top of the ESP board and the headphone jack sticking out of the extension board. The card’s notch faces upward, toward the headphone jack.</li>
+</ul>
+<ul>
+<li>The second USB port: This sits directly to the right of the port you’ve already been exposed to, but it’s covered by the plastic when the boards are in the housing. This is because the rightmost USB-C port, although it will also provide power to the unit, communicates using hardware pins already taken by the navigation stick. This is the native OTG port of the ESP32.</li>
+</ul>
+<ul>
+<li>The camera: This is connected to the back of the ESP board by a ribbon. I haven’t taken it out to know how easily it’ll go back on!</li>
+</ul>
+<p>That’s all the important physical info I can give you at this point. Hopefully this has been useful. I’m happy to correct errors or omissions, there are bound to be things I have missed.</p>
+  </main>
+</body>
+</html>

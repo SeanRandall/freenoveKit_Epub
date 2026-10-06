@@ -1,2 +1,4 @@
 dependencies:
-  espressif/mdns: "^1.8.0"
+  espressif/mdns: ^1.8.0
+  espressif/esp_audio_codec: ^2.0.0
+  78/esp-opus: "1.0.5"

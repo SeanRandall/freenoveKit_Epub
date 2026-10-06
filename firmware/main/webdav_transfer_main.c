@@ -759,6 +759,27 @@ void app_main(void)
         : transfer_mode_start(TRANSFER_WIFI_SSID,
                               TRANSFER_WIFI_PASSWORD, &status);
     is_remote_mode = status.remote_mode;
+    if (status.clock_mode) {
+        bool synced = false;
+        time_t before = time(NULL);
+        if (result == ESP_OK) {
+            for (int i = 0; i < 300
+                 && esp_sntp_get_sync_status() != SNTP_SYNC_STATUS_COMPLETED;
+                 ++i)
+                vTaskDelay(pdMS_TO_TICKS(100));
+            synced = esp_sntp_get_sync_status()
+                     == SNTP_SYNC_STATUS_COMPLETED;
+        }
+        printf("CLOCK_SYNC result=%s synced=%d before=%lld after=%lld\n",
+               esp_err_to_name(result), synced,
+               (long long)before, (long long)time(NULL));
+        speak(voice, synced ? "clock set" : "clock could not be set");
+        transfer_mode_stop();
+        REG_WRITE(RTC_CNTL_STORE1_REG, 0);
+        REG_WRITE(RTC_CNTL_STORE0_REG, BOOT_REQUEST_READER);
+        vTaskDelay(pdMS_TO_TICKS(250));
+        esp_restart();
+    }
     /* The RTC hint can be lost during the reader's staged partition switch;
        network.mode on the SD card is authoritative.  Therefore initialise
        the continuous remote output path only after transfer_mode has resolved

@@ -1,4 +1,24 @@
 dependencies:
+  78/esp-opus:
+    component_hash: 8182b733f071d7bfe1e837f4c9f8649a63e4c937177f089e65772880c02f2e17
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.0.5
+  espressif/esp_audio_codec:
+    component_hash: a5b9275af74247e3ce536d16a7080e4d77207a185b63e1bea368eb4d57176c2b
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.4'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 2.6.2
   espressif/mdns:
     component_hash: b679eafd0acae2066e2645bd91d073e33ca5be515e2545cd3c4e55a3e3bce3cb
     dependencies:
@@ -14,7 +34,9 @@ dependencies:
       type: idf
     version: 5.5.5
 direct_dependencies:
+- 78/esp-opus
+- espressif/esp_audio_codec
 - espressif/mdns
-manifest_hash: 527e5db2fc494b74d9876feef38224e89fa39554a4a186cd280535d375e22a19
+manifest_hash: c4721662c6e2f6ab46bf9e89fd78f60ddb762b1a481258905e5572aa9bb47e49
 target: esp32s3
 version: 2.0.0

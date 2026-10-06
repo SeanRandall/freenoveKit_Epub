@@ -29,6 +29,7 @@ typedef struct {
 typedef struct {
     char title[192];
     char cache_text_path[512];
+    size_t cache_text_offset;
     char *text;
     size_t text_length;
     epub_section_t *sections;
@@ -37,6 +38,8 @@ typedef struct {
     size_t marker_count;
     uint64_t word_count;
     size_t focus_section;
+    size_t next_focus_section;
+    size_t spine_count;
     bool cache_complete;
     bool index_rebuilt;
     bool truncated;
@@ -47,6 +50,16 @@ esp_err_t epub_load_document(const char *path, epub_document_t *document);
 /* Prioritises the resumed spine while creating/refreshing the SD cache. */
 esp_err_t epub_load_document_at(const char *path, size_t focus_section,
                                 epub_document_t *document);
+/* On a cache miss, extracts only the requested and following spine items. */
+esp_err_t epub_load_document_instant(const char *path, size_t focus_section,
+                                     epub_document_t *document);
+/* Builds the complete hidden cache; intended for a low-priority paused task. */
+esp_err_t epub_build_index(const char *path);
+esp_err_t epub_build_index_cancelable(const char *path,
+                                      const volatile bool *cancel_requested);
+/* Removes only EVV's generated hidden book cache.  User-provided sidecar
+   indexes beside books are deliberately left intact. */
+esp_err_t epub_clear_cache(void);
 bool epub_read_text(const epub_document_t *document, size_t offset,
                     char *destination, size_t length);
 void epub_free_document(epub_document_t *document);

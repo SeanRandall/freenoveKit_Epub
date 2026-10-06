@@ -1,0 +1,536 @@
+# EVV Reader user-interface messages.
+# Copyright (C) EVV Reader contributors
+# This file is distributed under the same license as EVV Reader.
+msgid ""
+msgstr ""
+"Project-Id-Version: EVV Reader 0.3-alpha\n"
+"POT-Creation-Date: 2026-10-06\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Language: fr\n"
+
+#: firmware/main/button_speech_main.c:3510
+msgid "%.1f degrees Celsius"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2551
+msgid "%s %u percent. position %u percent"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2559
+msgid "%s selected"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2862
+msgid "%s%s"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2123
+msgid "%s, %u"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:3279 firmware/main/button_speech_main.c:5016
+msgid "%s. %s"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:3066
+msgid "%s. %s. %u of %u"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2082 firmware/main/button_speech_main.c:5456
+msgid "%s. %u of %u"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2765
+msgid "%s. folder"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2780
+msgid "%u bytes"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:3455
+msgid "%u hour%s, %u minute%s remaining"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2777
+msgid "%u kilobytes"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:3498
+msgid "%u megabytes"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:3470
+msgid "%u minute%s"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:3449
+msgid "%u minute%s remaining"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2087 firmware/main/button_speech_main.c:5461
+msgid "%u of %u"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:3494
+msgid "%u point %u gigabytes"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2773
+msgid "%u point %u megabytes"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2867
+msgid ". folder"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2941 firmware/main/button_speech_main.c:3562
+msgid ". running"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2884
+msgid "alphabetical"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:5307
+msgid "audio file could not be played"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2551
+msgid "back"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:3054
+msgid "battery level"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:3054
+msgid "battery time estimate"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:5011
+msgid "battery unavailable"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:4060
+msgid "book cache cleared"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:4060 firmware/main/button_speech_main.c:4081
+msgid "book cache could not be cleared"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:4071
+msgid "book cache is being cleared"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2933
+msgid "book opening. %s"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:3963
+msgid "centre press detected"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2937
+msgid "clear book cache"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:3327
+msgid "clock could not be set"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:3324
+msgid "clock set"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2895
+msgid "clock. set %s"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2967
+msgid "close menu"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:3362
+msgid "close the book before clearing cache"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:3045
+msgid "current document"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:3045
+msgid "current section"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2884 firmware/main/button_speech_main.c:3054
+msgid "date"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2789
+msgid "date unavailable"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:3262
+msgid "day"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2821
+msgid "delete"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:4355
+msgid "delete confirmation expired"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:4349
+msgid "deleted"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:3054
+msgid "device temperature"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2904 firmware/main/button_speech_main.c:3012
+msgid "dictionary voice commands. %s"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2880
+msgid "do nothing"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:3963
+msgid "down press detected"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2523
+msgid "end of file"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2800
+msgid "EPUB book"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2797
+msgid "file"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:4355
+msgid "file could not be deleted"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2958 firmware/main/button_speech_main.c:5362
+msgid "file transfer"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2153
+msgid "first item"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2063
+msgid "first section"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2551
+msgid "forward"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2895
+msgid "from Wi-Fi"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2172
+msgid "heading"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2123
+msgid "headings"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:3262
+msgid "hour"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2933
+msgid "indexed"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2933
+msgid "instant"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2908 firmware/main/button_speech_main.c:3035
+msgid "interface sounds. %s"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2950
+msgid "keypress resets sleep timer. %s"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2153
+msgid "last item"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2063
+msgid "last section"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:3963
+msgid "left press detected"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:3446
+msgid "less than one minute remaining"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2919 firmware/main/button_speech_main.c:3137 firmware/main/button_speech_main.c:3578
+msgid "library"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2857 firmware/main/button_speech_main.c:2860
+msgid "library empty"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2862
+msgid "library."
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2816
+msgid "lock"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:4372
+msgid "lock could not be changed"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2813
+msgid "lock status unavailable"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:4372
+msgid "locked"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2806
+msgid "M4B audiobook"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2895
+msgid "manually"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:3562
+msgid "menu. sleep timer. %u minutes%s"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:3567
+msgid "menu. sleep timer. off"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:3262
+msgid "minute"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:3262
+msgid "month"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2803
+msgid "MP3 audio"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2961 firmware/main/button_speech_main.c:5362
+msgid "NVDA remote"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2900 firmware/main/button_speech_main.c:2904 firmware/main/button_speech_main.c:2908 firmware/main/button_speech_main.c:2915 firmware/main/button_speech_main.c:2929 firmware/main/button_speech_main.c:2950 firmware/main/button_speech_main.c:2954 firmware/main/button_speech_main.c:3012 firmware/main/button_speech_main.c:3025 firmware/main/button_speech_main.c:3035 firmware/main/button_speech_main.c:3066 firmware/main/button_speech_main.c:3127
+msgid "off"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2900 firmware/main/button_speech_main.c:2904 firmware/main/button_speech_main.c:2908 firmware/main/button_speech_main.c:2915 firmware/main/button_speech_main.c:2929 firmware/main/button_speech_main.c:2950 firmware/main/button_speech_main.c:2954 firmware/main/button_speech_main.c:3012 firmware/main/button_speech_main.c:3025 firmware/main/button_speech_main.c:3035 firmware/main/button_speech_main.c:3066 firmware/main/button_speech_main.c:3127
+msgid "on"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2919 firmware/main/button_speech_main.c:3137
+msgid "on startup. %s"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2915 firmware/main/button_speech_main.c:3127
+msgid "pause between sections. %s"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2912
+msgid "playing screen status items"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:3578 firmware/main/button_speech_main.c:4656
+msgid "reading"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:3371
+msgid "really clear book cache, press again to confirm"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:4388
+msgid "really delete %s, press again to confirm"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2929
+msgid "recent files. %s"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:3858
+msgid "recording could not be saved"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:4616 firmware/main/button_speech_main.c:5555
+msgid "recording could not be started"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:3054
+msgid "remaining file duration"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:3054
+msgid "remaining SD card space"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:3054
+msgid "remaining section duration"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2964 firmware/main/button_speech_main.c:5362
+msgid "RemSound receiver"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2880
+msgid "resume playback"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2919 firmware/main/button_speech_main.c:3137
+msgid "resume reading"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:3963
+msgid "right press detected"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:4270
+msgid "SD card root. %u items"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:5810
+msgid "SD card unavailable"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2123
+msgid "sections"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:5362
+msgid "setting clock"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2884
+msgid "size"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:3054
+msgid "sleep time remaining"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:3205
+msgid "sleep timer off"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:3208
+msgid "sleep timer started. %u minutes"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2941
+msgid "sleep timer. %u minutes%s"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2946
+msgid "sleep timer. off"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2926
+msgid "sort files by. %s"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2880
+msgid "speak battery"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2880
+msgid "speak both"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2880
+msgid "speak time"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2889
+msgid "speaking rate. %d"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2523
+msgid "start of file"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2954
+msgid "start sleep timer on boot. %s"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:3549
+msgid "status unavailable"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2900 firmware/main/button_speech_main.c:3025
+msgid "substitution dictionary. %s"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:5423
+msgid "this book could not be opened"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:3054
+msgid "time"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:3045
+msgid "time remaining. %s"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:5005
+msgid "time unavailable"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2816
+msgid "unlock"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2923
+msgid "unlock action. %s"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:4372
+msgid "unlocked"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:3963
+msgid "up press detected"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:2892
+msgid "volume. %d percent"
+msgstr ""
+
+#: firmware/main/button_speech_main.c:3262
+msgid "year"
+msgstr ""
+
