@@ -1,0 +1,14 @@
+# IPv4 address of the computer running the RemSound sender.
+host=192.168.1.100
+
+# RemSound UDP port. The normal default is 47830.
+port=47830
+
+# Password selected in the RemSound profile.
+password=replace-with-your-password
+
+# Receiver output volume, from 0 through 100.
+volume=70
+
+# DHCP is recommended.
+player_ip=dhcp
