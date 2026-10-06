@@ -61,11 +61,15 @@ repository or its public firmware images.
 
 
 
-## Install the firmware on Windows
+## Install the firmware
 
-You can also use the [browser-based firmware installer](https://seanrandall.github.io/freenoveKit_Epub/)
-in a current Chrome or Edge browser. It includes the reader guide and a
-physical description of the Freenove kit.
+Use the [browser-based firmware installer](https://seanrandall.github.io/freenoveKit_Epub/)
+in a current desktop Chrome or Edge browser on Windows, macOS, Linux or
+ChromeOS. It includes all three voice choices, the reader guide and a physical
+description of the Freenove kit.
+
+Windows users can instead download the standalone installer and firmware from
+the [latest GitHub release](https://github.com/SeanRandall/freenoveKit_Epub/releases/latest).
 
 Download these two files from the "release" directory:
 
@@ -90,14 +94,6 @@ try again.
 
 Flashing replaces the firmware in internal flash. It does not erase content or
 configuration stored on the SD card.
-
-## Install from a web browser
-
-The staged browser installer under "docs" supports Chrome and Edge on systems
-with Web Serial. It offers the same three voice-language choices, downloads the
-matching reader and network images, and writes the required flash regions
-without erasing saved device preferences. Enable GitHub Pages for the "docs"
-directory to publish it.
 
 ## Command-line installation
 
