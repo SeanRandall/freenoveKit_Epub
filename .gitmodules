@@ -1,0 +1,9 @@
+[submodule "vendor/openbst"]
+	path = vendor/openbst
+	url = https://github.com/Mudb0y/openbst.git
+[submodule "vendor/picotts"]
+	path = vendor/picotts
+	url = https://github.com/ihuguet/picotts.git
+[submodule "vendor/dectalk-dtc01-reborn"]
+	path = vendor/dectalk-dtc01-reborn
+	url = https://github.com/rommix0/DECtalk-DTC-01-Reborn.git

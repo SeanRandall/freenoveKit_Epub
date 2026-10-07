@@ -2,6 +2,8 @@ build/
 firmware/build/
 firmware/build-transfer/
 firmware/build-release-*/
+firmware/build-pico/
+firmware/build-openbst/
 firmware/managed_components/
 sdkconfig
 sdkconfig.old

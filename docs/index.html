@@ -10,12 +10,43 @@
   <main>
     <h1>Install EVV Reader</h1>
     <p>Connect the 1.14-inch Freenove Media Kit with a data-capable USB cable. This installer requires Chrome or Edge and a secure web page.</p>
-    <fieldset>
-      <legend>Voice language</legend>
-      <label><input type="radio" name="language" value="en-US" checked> US English</label>
-      <label><input type="radio" name="language" value="en-GB"> British English</label>
-      <label><input type="radio" name="language" value="fr-FR"> French voice, English interface</label>
-    </fieldset>
+    <h2>Choose a speech engine and voice</h2>
+    <p>Open an engine below, then choose a voice variant.</p>
+    <details open>
+      <summary>OpenEVV</summary>
+      <fieldset>
+        <legend>OpenEVV voice variant</legend>
+        <label><input type="radio" name="firmware" value="openevv:en-US" checked> US English</label>
+        <label><input type="radio" name="firmware" value="openevv:en-GB"> British English</label>
+        <label><input type="radio" name="firmware" value="openevv:fr-FR"> French voice, English interface</label>
+      </fieldset>
+    </details>
+    <details>
+      <summary>Pico</summary>
+      <fieldset>
+        <legend>Pico voice variant</legend>
+        <label><input type="radio" name="firmware" value="pico:en-US"> US English</label>
+        <label><input type="radio" name="firmware" value="pico:en-GB"> British English</label>
+        <label><input type="radio" name="firmware" value="pico:de-DE"> German voice, English interface</label>
+        <label><input type="radio" name="firmware" value="pico:es-ES"> Spanish voice, English interface</label>
+        <label><input type="radio" name="firmware" value="pico:fr-FR"> French voice, English interface</label>
+        <label><input type="radio" name="firmware" value="pico:it-IT"> Italian voice, English interface</label>
+      </fieldset>
+    </details>
+    <details>
+      <summary>DECtalk</summary>
+      <fieldset>
+        <legend>DECtalk build variant</legend>
+        <label><input type="radio" name="firmware" value="dectalk:dtc01-en-US"> DTC-01 US English</label>
+      </fieldset>
+    </details>
+    <details>
+      <summary>OpenBST</summary>
+      <fieldset>
+        <legend>OpenBST build variant</legend>
+        <label><input type="radio" name="firmware" value="openbst:1998ENG"> 1998 English</label>
+      </fieldset>
+    </details>
     <button id="install">Connect and install</button>
     <progress id="progress" max="100" value="0"></progress>
     <p id="device"><strong>Device:</strong> not connected</p>

@@ -32,7 +32,6 @@
 #include "freertos/task.h"
 #include "nvs.h"
 #include "nvs_flash.h"
-#include "evv_abi.h"
 #include "driver/sdmmc_host.h"
 #include "esp_vfs_fat.h"
 #include "ff.h"
@@ -41,30 +40,12 @@
 #include "esp_audio_dec_default.h"
 #include "esp_audio_simple_dec.h"
 #include "esp_audio_simple_dec_default.h"
+#include "speech_engine.h"
 
-#include "eci_old.h"
-
-enum ECIMessage { eciWaveformBuffer, eciPhonemeBuffer, eciIndexReply };
-enum ECICallbackReturn { eciDataNotProcessed, eciDataProcessed, eciDataAbort };
-
-OldInst *STDCALL eo_new(void);
-int STDCALL es_delete(OldInst *h);
-int STDCALL et_addText(OldInst *h, const char *text);
-int STDCALL et_insertIndex(OldInst *h, int32_t n);
-int STDCALL et_synthesize(OldInst *h);
-int STDCALL ev_setOutputBuffer(OldInst *h, int32_t n, void *buf);
-int STDCALL ev_setParam(OldInst *h, int32_t which, int32_t value);
-int STDCALL vc_setVoiceParam(OldInst *h, int32_t voice, int32_t which,
-                             int32_t value);
-int32_t STDCALL api_set_param(void *h2, int32_t kind, int32_t param,
-                              int32_t value);
-void STDCALL eo_registerCallback(OldInst *h, void *cb, void *data);
-void STDCALL eo_synchronizeSynth(OldInst *h);
-int STDCALL eo_speaking(OldInst *h);
-void evvRunStaticInitialisers(void);
-void evv_port_start(void);
-
-#define SAMPLE_RATE 11025
+#ifndef EVV_ENGINE_SAMPLE_RATE
+#define EVV_ENGINE_SAMPLE_RATE 11025
+#endif
+#define SAMPLE_RATE EVV_ENGINE_SAMPLE_RATE
 #define FRAME_SAMPLES 2048
 #define PAUSE_REWIND_MS 500
 #define ROLLING_START_MS 4000
@@ -75,12 +56,7 @@ void evv_port_start(void);
 #define READER_RING_LOW_SAMPLES (SAMPLE_RATE * 30)
 #define READER_RING_HIGH_SAMPLES (SAMPLE_RATE * 60)
 #define READER_SYNTH_RESERVE_SAMPLES (SAMPLE_RATE * 10)
-#define VOICE_SPEED 6
-#define VOICE_VOLUME 7
-#define ENV_PHRASE_PREDICTION 11
-#define PARAM_PHRASE_PREDICTION 13
 #define ENGINE_VOLUME_MAX 80
-#define PARAM_INPUT_TYPE 1
 #define READER_RECENT_MAX 5
 #define I2S_BCLK GPIO_NUM_42
 #define I2S_LRCLK GPIO_NUM_41
@@ -89,7 +65,6 @@ void evv_port_start(void);
 #define BUTTON_ADC_CHANNEL ADC_CHANNEL_8 /* GPIO19 on ESP32-S3 */
 
 static const char *const TAG = "button_speech";
-static int16_t *mono_frame;
 static int16_t *stereo_frame;
 static int16_t *reader_playback_frame;
 static i2s_chan_handle_t tx_channel;
@@ -249,11 +224,19 @@ static bool reader_quick_start;
 static volatile bool reader_continue_pending;
 static volatile bool reader_menu;
 static bool reader_status_menu;
+static bool reader_speech_menu;
+static size_t reader_speech_menu_index;
+static int reader_speech_values[SPEECH_SETTING_COUNT];
+static uint32_t reader_speech_saved;
+static volatile uint32_t reader_speech_revision;
+/* OpenEVV's numbered voices are complete parameter presets.  Selecting one
+   must be allowed to replace the old timbre values; rate and volume remain
+   explicit user preferences. */
+static volatile bool reader_speech_voice_changed;
 static size_t reader_menu_index;
 typedef enum {
     READER_MENU_SLEEP_TIMER,
-    READER_MENU_RATE,
-    READER_MENU_VOLUME,
+    READER_MENU_SPEECH,
     READER_MENU_CLOCK,
     READER_MENU_LIBRARY_SORT,
     READER_MENU_SECTION_PAUSE,
@@ -261,8 +244,6 @@ typedef enum {
     READER_MENU_UNLOCK_ACTION,
     READER_MENU_RECENT_FILES,
     READER_MENU_BOOK_OPENING,
-    READER_MENU_SUBSTITUTIONS,
-    READER_MENU_DICTIONARY_COMMANDS,
     READER_MENU_INTERFACE_SOUNDS,
     READER_MENU_STATUS,
     READER_MENU_CLEAR_CACHE,
@@ -301,8 +282,7 @@ static char reader_pending_lastbook[320];
 static char reader_pending_read_path[256];
 static uint32_t reader_pending_read_section;
 static uint32_t reader_pending_read_offset;
-static bool reader_dictionary_commands = true;
-static bool reader_substitutions_enabled = true;
+static bool reader_dictionary_annotations;
 static bool reader_interface_sounds = true;
 static bool reader_remaining_scope_section;
 static bool reader_pause_between_sections;
@@ -502,31 +482,31 @@ extern const uint8_t recording_stopped_wav_end[]
 static void reader_mix_keypress(int16_t *output, size_t frames);
 #endif
 
-static enum ECICallbackReturn STDCALL on_message(OldInst *instance,
-                                                  enum ECIMessage message,
-                                                  long parameter,
-                                                  void *context)
+static void on_speech_marker(uint32_t marker, void *context)
 {
-    (void)instance;
     (void)context;
-    if (message == eciIndexReply) {
 #ifdef PARAGRAPH_READER_MODE
-        size_t index = (size_t)parameter;
+        size_t index = (size_t)marker;
         xSemaphoreTake(reader_pcm_mutex, portMAX_DELAY);
         if (reader_rendering && index < reader_marker_count
             && index < reader_marker_capacity)
             reader_markers[index].sample_offset = reader_pcm_samples;
         xSemaphoreGive(reader_pcm_mutex);
 #endif
-        return eciDataProcessed;
-    }
-    if (message != eciWaveformBuffer)
-        return eciDataProcessed;
-    size_t count = (size_t)parameter;
+}
+
+static bool on_speech_pcm(const int16_t *pcm, size_t count, void *context)
+{
+    (void)context;
 #ifdef PARAGRAPH_READER_MODE
     if (reader_rendering) {
-        if (reader_render_abort)
-            return eciDataAbort;
+        /* This callback is also used while a short UI utterance is rendered
+           into the temporary PCM buffer.  A newer menu keypress increments
+           requested_generation from the button task; abort here so a
+           synchronous backend such as Pico does not finish obsolete speech
+           before the audio task can consume the replacement event. */
+        if (reader_render_abort || active_generation != requested_generation)
+            return false;
         xSemaphoreTake(reader_pcm_mutex, portMAX_DELAY);
         size_t retain_floor = reader_play_offset > READER_RETAIN_SAMPLES
             ? reader_play_offset - READER_RETAIN_SAMPLES : 0;
@@ -545,31 +525,31 @@ static enum ECICallbackReturn STDCALL on_message(OldInst *instance,
                 printf("PCM_RING_WRITE_WRAP absolute=%u physical=%u count=%u\n",
                        (unsigned)reader_pcm_samples, (unsigned)write_at,
                        (unsigned)count);
-            memcpy(reader_pcm + write_at, mono_frame,
+            memcpy(reader_pcm + write_at, pcm,
                    first * sizeof(int16_t));
             if (first < count)
-                memcpy(reader_pcm, mono_frame + first,
+                memcpy(reader_pcm, pcm + first,
                        (count - first) * sizeof(int16_t));
         }
         reader_pcm_samples += count;
         reader_total_pcm_generated += count;
         xSemaphoreGive(reader_pcm_mutex);
-        return reader_render_overflow ? eciDataAbort : eciDataProcessed;
+        return !reader_render_overflow;
     }
 #endif
     if (active_generation != requested_generation)
-        return eciDataAbort;
+        return false;
     for (size_t i = 0; i < count; ++i) {
         /* The amplifier is mono, but the standard-I2S peripheral sends slots
            in pairs. Duplicating the sample also makes either board revision
            and either headphone channel audible. */
 #ifdef PARAGRAPH_READER_MODE
-        int32_t sample = ((int32_t)mono_frame[i] * reader_volume) / 100;
+        int32_t sample = ((int32_t)pcm[i] * reader_volume) / 100;
         stereo_frame[i * 2] = (int16_t)sample;
         stereo_frame[i * 2 + 1] = (int16_t)sample;
 #else
-        stereo_frame[i * 2] = mono_frame[i];
-        stereo_frame[i * 2 + 1] = mono_frame[i];
+        stereo_frame[i * 2] = pcm[i];
+        stereo_frame[i * 2 + 1] = pcm[i];
 #endif
     }
 #ifdef PARAGRAPH_READER_MODE
@@ -584,10 +564,10 @@ static enum ECICallbackReturn STDCALL on_message(OldInst *instance,
         ESP_LOGE(TAG, "I2S write failed: %s (%u/%u bytes)",
                  esp_err_to_name(err), (unsigned)bytes_written,
                  (unsigned)(count * 2 * sizeof(int16_t)));
-        return eciDataAbort;
+        return false;
     }
     speech_samples += count;
-    return eciDataProcessed;
+    return true;
 }
 
 static esp_err_t init_audio(void)
@@ -622,7 +602,8 @@ static esp_err_t init_audio(void)
     return ESP_OK;
 }
 
-static bool speak(OldInst *instance, const char *text, uint32_t generation)
+static bool speak(speech_engine_t *instance, const char *text,
+                  uint32_t generation)
 {
     static const int16_t silence[FRAME_SAMPLES * 2];
     size_t silence_written = 0;
@@ -644,10 +625,10 @@ static bool speak(OldInst *instance, const char *text, uint32_t generation)
         return false;
 #endif
     speech_samples = 0;
-    (void)ev_setParam(instance, PARAM_INPUT_TYPE, 0);
+    (void)speech_engine_set(instance, SPEECH_SETTING_ANNOTATED_INPUT, 0);
     active_generation = generation;
     printf("SPEAK %s\n", text);
-    if (!et_addText(instance, text) || !et_synthesize(instance)) {
+    if (!speech_engine_synthesize(instance, text)) {
         (void)i2s_channel_disable(tx_channel);
 #ifdef PARAGRAPH_READER_MODE
         reader_audio_active = false;
@@ -657,12 +638,12 @@ static bool speak(OldInst *instance, const char *text, uint32_t generation)
 
     TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(10000);
     while (xTaskGetTickCount() < deadline) {
-        int speaking = eo_speaking(instance);
+        int speaking = speech_engine_busy(instance);
         if (speech_samples > 0 && !speaking)
             break;
         vTaskDelay(pdMS_TO_TICKS(1));
     }
-    eo_synchronizeSynth(instance);
+    speech_engine_wait(instance);
 
     if (generation != requested_generation) {
         (void)i2s_channel_disable(tx_channel);
@@ -863,8 +844,6 @@ static void reader_load_substitutions(void)
 
 static const char *reader_apply_substitutions(const char *input)
 {
-    if (!reader_substitutions_enabled)
-        return input;
     strlcpy(reader_substituted_chunk, input,
             sizeof(reader_substituted_chunk));
     char temporary[sizeof(reader_substituted_chunk)];
@@ -872,7 +851,7 @@ static const char *reader_apply_substitutions(const char *input)
         const char *from = reader_substitutions[r].from;
         const char *to = reader_substitutions[r].to;
         char plain_replacement[512];
-        if (!reader_dictionary_commands) {
+        if (!reader_dictionary_annotations) {
             strlcpy(plain_replacement, to, sizeof(plain_replacement));
             reader_dictionary_strip_commands(plain_replacement);
             to = plain_replacement;
@@ -891,6 +870,21 @@ static const char *reader_apply_substitutions(const char *input)
         temporary[used] = 0;
         strlcpy(reader_substituted_chunk, temporary,
                 sizeof(reader_substituted_chunk));
+    }
+    /* Some EPUBs label Windows-1252 prose as a single-byte encoding.  The
+       cache preserves those bytes so dictionary matching still works, but
+       C1 punctuation must not reach a synthesizer as control characters. */
+    for (unsigned char *at = (unsigned char *)reader_substituted_chunk;
+         *at; ++at) {
+        switch (*at) {
+        case 0x85: *at = '.'; break;
+        case 0x91: case 0x92: *at = '\''; break;
+        case 0x93: case 0x94: *at = '"'; break;
+        case 0x96: case 0x97: *at = '-'; break;
+        default:
+            if (*at >= 0x80 && *at < 0xa0) *at = ' ';
+            break;
+        }
     }
     return reader_substituted_chunk;
 }
@@ -935,7 +929,7 @@ static bool reader_discard_dma_audio(void)
     return init_audio() == ESP_OK;
 }
 
-static bool reader_start_next_text_chunk(OldInst *instance)
+static bool reader_start_next_text_chunk(speech_engine_t *instance)
 {
     size_t text_len = reader_book_length;
     if (reader_text_offset >= text_len)
@@ -1089,49 +1083,75 @@ static bool reader_start_next_text_chunk(OldInst *instance)
         size_t marker = reader_marker_count++;
         reader_markers[marker].text_offset = chunk_start;
         reader_markers[marker].sample_offset = SIZE_MAX;
-        if (!et_insertIndex(instance, (int32_t)marker))
+        if (!speech_engine_insert_marker(instance, (uint32_t)marker))
             reader_markers[marker].sample_offset = reader_pcm_samples;
     }
     reader_sentence_continuation = !sentence_ended;
     const char *synthesis_text = reader_apply_substitutions(reader_text_chunk);
     reader_log_dash_context("SOURCE", reader_text_chunk);
     reader_log_dash_context("RESULT", synthesis_text);
-    (void)ev_setParam(instance, PARAM_INPUT_TYPE,
-                      reader_dictionary_commands ? 1 : 0);
+    (void)speech_engine_set(instance, SPEECH_SETTING_ANNOTATED_INPUT,
+                            reader_dictionary_annotations ? 1 : 0);
     reader_chunk_started_us = esp_timer_get_time();
     reader_chunk_started_samples = reader_pcm_samples;
     reader_chunk_started_bytes = take;
-    if (!et_addText(instance, synthesis_text) || !et_synthesize(instance)) {
+    /* Long-form generation can resume after an intervening UI utterance or
+       pause.  Adopt the current generation before every chunk; otherwise the
+       interruptibility check correctly rejects all of this chunk's PCM as
+       stale even though the book render itself is current. */
+    active_generation = requested_generation;
+    if (!speech_engine_synthesize(instance, synthesis_text)) {
         reader_rendering = false;
         return false;
     }
     return true;
 }
 
-static void reader_abort_render(OldInst *instance)
+static void reader_abort_render(speech_engine_t *instance)
 {
     reader_render_abort = true;
     TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(10000);
-    while (eo_speaking(instance) && xTaskGetTickCount() < deadline)
+    while (speech_engine_busy(instance) && xTaskGetTickCount() < deadline)
         vTaskDelay(pdMS_TO_TICKS(1));
     reader_rendering = false;
 }
 
-static bool reader_speak_buffered(OldInst *instance, const char *text,
+static bool reader_speak_buffered(speech_engine_t *instance, const char *text,
                                   uint32_t generation)
 {
+    char terminated[sizeof(reader_announcement) + 3];
+    const char *synthesis_text = text;
+    size_t text_length = text ? strlen(text) : 0;
+    while (text_length && isspace((unsigned char)text[text_length - 1]))
+        --text_length;
+    if (text_length
+        && text[text_length - 1] != '.' && text[text_length - 1] != '!'
+        && text[text_length - 1] != '?') {
+        size_t copy = text_length;
+        if (copy > sizeof(terminated) - 3) copy = sizeof(terminated) - 3;
+        memcpy(terminated, text, copy);
+        terminated[copy++] = '.';
+        terminated[copy] = '\0';
+        synthesis_text = terminated;
+        printf("NAV_SPEECH terminated text=%s\n", synthesis_text);
+    }
+    /* Temporary navigation speech owns the PCM ring.  Reset both absolute
+       counters together: retaining the book's old read offset while the
+       write counter returns to zero makes the unsigned free-space
+       calculation underflow and rejects every generated sample. */
     reader_pcm_samples = 0;
+    reader_play_offset = 0;
     reader_pcm_valid = false;
     reader_render_overflow = false;
     reader_render_abort = false;
     reader_rendering = true;
-    (void)ev_setParam(instance, PARAM_INPUT_TYPE, 0);
+    (void)speech_engine_set(instance, SPEECH_SETTING_ANNOTATED_INPUT, 0);
     active_generation = generation;
-    if (!et_addText(instance, text) || !et_synthesize(instance)) {
+    if (!speech_engine_synthesize(instance, synthesis_text)) {
         reader_rendering = false;
         return false;
     }
-    while (eo_speaking(instance) && generation == requested_generation)
+    while (speech_engine_busy(instance) && generation == requested_generation)
         vTaskDelay(pdMS_TO_TICKS(1));
     reader_rendering = false;
     if (generation != requested_generation || !reader_pcm_samples)
@@ -1169,7 +1189,7 @@ static bool reader_speak_buffered(OldInst *instance, const char *text,
     return true;
 }
 
-static bool reader_load_book(OldInst *instance, uint32_t generation)
+static bool reader_load_book(speech_engine_t *instance, uint32_t generation)
 {
     int64_t started_us = esp_timer_get_time();
     unsigned start_target_ms = reader_quick_start
@@ -1214,12 +1234,12 @@ static bool reader_load_book(OldInst *instance, uint32_t generation)
         return false;
 
     TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(60000);
-    while (eo_speaking(instance) && xTaskGetTickCount() < deadline) {
+    while (speech_engine_busy(instance) && xTaskGetTickCount() < deadline) {
         if (reader_render_abort)
             return false;
         vTaskDelay(pdMS_TO_TICKS(1));
     }
-    eo_synchronizeSynth(instance);
+    speech_engine_wait(instance);
     reader_rendering = false;
     if (reader_pcm_samples == 0)
         return false;
@@ -1233,12 +1253,12 @@ static bool reader_load_book(OldInst *instance, uint32_t generation)
         vTaskDelay(pdMS_TO_TICKS(10));
         if (!reader_start_next_text_chunk(instance))
             break;
-        while (eo_speaking(instance) && xTaskGetTickCount() < deadline) {
+        while (speech_engine_busy(instance) && xTaskGetTickCount() < deadline) {
             if (reader_render_abort)
                 return false;
             vTaskDelay(pdMS_TO_TICKS(1));
         }
-        eo_synchronizeSynth(instance);
+        speech_engine_wait(instance);
         reader_rendering = false;
     }
 
@@ -1250,7 +1270,7 @@ static bool reader_load_book(OldInst *instance, uint32_t generation)
            (unsigned)reader_pcm_samples,
            (unsigned)(reader_pcm_samples * 1000 / SAMPLE_RATE),
            (unsigned)((esp_timer_get_time() - started_us) / 1000),
-           eo_speaking(instance));
+           speech_engine_busy(instance));
     (void)reader_start_next_text_chunk(instance);
     return true;
 }
@@ -1511,14 +1531,14 @@ static void reader_play_task(void *arg)
     vTaskDeleteWithCaps(NULL);
 }
 
-static void reader_finish_book_render(OldInst *instance)
+static void reader_finish_book_render(speech_engine_t *instance)
 {
     while (!reader_render_abort) {
         if (reader_rendering) {
             size_t before = reader_pcm_samples;
-            while (eo_speaking(instance))
+            while (speech_engine_busy(instance))
                 vTaskDelay(pdMS_TO_TICKS(1));
-            eo_synchronizeSynth(instance);
+            speech_engine_wait(instance);
             reader_rendering = false;
             size_t added = reader_pcm_samples - reader_chunk_started_samples;
             int64_t elapsed_us = esp_timer_get_time() - reader_chunk_started_us;
@@ -1758,12 +1778,18 @@ static void reader_save_preferences(void)
 {
     if (!reader_prefs)
         return;
-    (void)nvs_set_i32(reader_prefs, "rate", reader_rate);
+    char rate_key[12];
+    snprintf(rate_key, sizeof(rate_key), "%s_rate",
+             speech_engine_storage_id());
+    (void)nvs_set_i32(reader_prefs, rate_key, reader_rate);
     (void)nvs_set_i32(reader_prefs, "volume", reader_volume);
-    (void)nvs_set_i32(reader_prefs, "dictcmd",
-                      reader_dictionary_commands ? 1 : 0);
-    (void)nvs_set_i32(reader_prefs, "subdict",
-                      reader_substitutions_enabled ? 1 : 0);
+    for (size_t i = 0; i < SPEECH_SETTING_COUNT; ++i) {
+        char key[12];
+        snprintf(key, sizeof(key), "%s_s%u", speech_engine_storage_id(),
+                 (unsigned)i);
+        if (reader_speech_saved & (1U << i))
+            (void)nvs_set_i32(reader_prefs, key, reader_speech_values[i]);
+    }
     (void)nvs_set_i32(reader_prefs, "uisound",
                       reader_interface_sounds ? 1 : 0);
     (void)nvs_set_i32(reader_prefs, "remscope",
@@ -1853,16 +1879,42 @@ static void reader_load_preferences(void)
     ESP_ERROR_CHECK(err);
     ESP_ERROR_CHECK(nvs_open("reader", NVS_READWRITE, &reader_prefs));
     int32_t value;
-    if (nvs_get_i32(reader_prefs, "rate", &value) == ESP_OK
-        && value >= 60 && value <= 180)
+    bool have_stored_speech_rate = false;
+    char rate_key[12];
+    snprintf(rate_key, sizeof(rate_key), "%s_rate",
+             speech_engine_storage_id());
+    esp_err_t rate_error = nvs_get_i32(reader_prefs, rate_key, &value);
+    /* Preserve existing OpenEVV users' settings while starting every newly
+       introduced engine with its own clean profile. */
+    if (rate_error != ESP_OK
+        && strcmp(speech_engine_storage_id(), "oevv") == 0)
+        rate_error = nvs_get_i32(reader_prefs, "rate", &value);
+    if (rate_error == ESP_OK && value >= 60 && value <= 180) {
         reader_rate = value;
+        have_stored_speech_rate = true;
+    }
     if (nvs_get_i32(reader_prefs, "volume", &value) == ESP_OK
         && value >= 2 && value <= 100)
         reader_volume = value;
-    if (nvs_get_i32(reader_prefs, "dictcmd", &value) == ESP_OK)
-        reader_dictionary_commands = value != 0;
-    if (nvs_get_i32(reader_prefs, "subdict", &value) == ESP_OK)
-        reader_substitutions_enabled = value != 0;
+    for (size_t i = 0; i < SPEECH_SETTING_COUNT; ++i) {
+        char key[12];
+        snprintf(key, sizeof(key), "%s_s%u", speech_engine_storage_id(),
+                 (unsigned)i);
+        esp_err_t speech_error = nvs_get_i32(reader_prefs, key, &value);
+        if (speech_error != ESP_OK
+            && strcmp(speech_engine_storage_id(), "oevv") == 0) {
+            snprintf(key, sizeof(key), "speech%u", (unsigned)i);
+            speech_error = nvs_get_i32(reader_prefs, key, &value);
+        }
+        if (speech_error == ESP_OK) {
+            reader_speech_values[i] = value;
+            reader_speech_saved |= 1U << i;
+        }
+    }
+    if (have_stored_speech_rate) {
+        reader_speech_values[SPEECH_SETTING_RATE] = reader_rate;
+        reader_speech_saved |= 1U << SPEECH_SETTING_RATE;
+    }
     if (nvs_get_i32(reader_prefs, "uisound", &value) == ESP_OK)
         reader_interface_sounds = value != 0;
     if (nvs_get_i32(reader_prefs, "remscope", &value) == ESP_OK)
@@ -1917,9 +1969,8 @@ static void reader_load_preferences(void)
         if (valid)
             memcpy(reader_status_order, saved_order, sizeof(saved_order));
     }
-    printf("PREFERENCES rate=%d volume=%d substitutions=%d dictionary_commands=%d interface_sounds=%d remaining_scope=%s section_pause=%d startup_resume=%d sleep_choice=%u sleep_key=%d sleep_boot=%d unlock=%d sort=%d recents=%d\n",
-           reader_rate, reader_volume, reader_substitutions_enabled,
-           reader_dictionary_commands,
+    printf("PREFERENCES rate=%d volume=%d interface_sounds=%d remaining_scope=%s section_pause=%d startup_resume=%d sleep_choice=%u sleep_key=%d sleep_boot=%d unlock=%d sort=%d recents=%d\n",
+           reader_rate, reader_volume,
            reader_interface_sounds,
            reader_remaining_scope_section ? "section" : "document",
            reader_pause_between_sections, reader_startup_resume,
@@ -2885,25 +2936,14 @@ static void reader_format_menu_item(void)
         "alphabetical", "date", "size",
     };
     ReaderMenuItem item = reader_menu_items[reader_menu_index];
-    if (item == READER_MENU_RATE)
-        snprintf(reader_announcement, sizeof(reader_announcement),
-                 "speaking rate. %d", reader_rate);
-    else if (item == READER_MENU_VOLUME)
-        snprintf(reader_announcement, sizeof(reader_announcement),
-                 "volume. %d percent", reader_volume);
+    if (item == READER_MENU_SPEECH)
+        strlcpy(reader_announcement, "speech settings",
+                sizeof(reader_announcement));
     else if (item == READER_MENU_CLOCK)
         snprintf(reader_announcement, sizeof(reader_announcement),
                  "clock. set %s",
                  reader_clock_online && reader_have_wifi_config
                      ? "from Wi-Fi" : "manually");
-    else if (item == READER_MENU_SUBSTITUTIONS)
-        snprintf(reader_announcement, sizeof(reader_announcement),
-                 "substitution dictionary. %s",
-                 reader_substitutions_enabled ? "on" : "off");
-    else if (item == READER_MENU_DICTIONARY_COMMANDS)
-        snprintf(reader_announcement, sizeof(reader_announcement),
-                 "dictionary voice commands. %s",
-                 reader_dictionary_commands ? "on" : "off");
     else if (item == READER_MENU_INTERFACE_SOUNDS)
         snprintf(reader_announcement, sizeof(reader_announcement),
                  "interface sounds. %s",
@@ -2971,13 +3011,12 @@ static void reader_format_menu_item(void)
 static void reader_build_menu(void)
 {
     static const ReaderMenuItem base[] = {
-        READER_MENU_SLEEP_TIMER, READER_MENU_RATE, READER_MENU_VOLUME,
+        READER_MENU_SLEEP_TIMER, READER_MENU_SPEECH,
         READER_MENU_CLOCK, READER_MENU_LIBRARY_SORT,
         READER_MENU_SECTION_PAUSE, READER_MENU_STARTUP,
         READER_MENU_UNLOCK_ACTION, READER_MENU_RECENT_FILES,
         READER_MENU_BOOK_OPENING, READER_MENU_STATUS,
-        READER_MENU_INTERFACE_SOUNDS, READER_MENU_SUBSTITUTIONS,
-        READER_MENU_DICTIONARY_COMMANDS,
+        READER_MENU_INTERFACE_SOUNDS,
         READER_MENU_SLEEP_KEY, READER_MENU_SLEEP_BOOT,
     };
     reader_menu_count = 0;
@@ -2998,34 +3037,135 @@ static void reader_build_menu(void)
 
 static void reader_speak_menu_item(void)
 {
+    /* A rapid menu change supersedes the value currently being spoken.  The
+       pending announcement remains debounced below, but advancing the
+       generation now makes the engine's PCM callback abort the obsolete
+       utterance instead of forcing the user to hear it to completion. */
+    if (reader_ui_busy)
+        ++requested_generation;
     reader_menu_announcement_pending = true;
     reader_menu_changed_at = xTaskGetTickCount();
 }
 
-static void reader_toggle_dictionary_commands(void)
+static void reader_format_number_words(int value, char *number, size_t size)
 {
-    reader_dictionary_commands = !reader_dictionary_commands;
-    reader_render_abort = true;
-    reader_loaded = false;
-    reader_pcm_valid = false;
-    reader_schedule_preferences_save();
-    snprintf(reader_announcement, sizeof(reader_announcement),
-             "dictionary voice commands. %s",
-             reader_dictionary_commands ? "on" : "off");
+    /* OpenBST 1998's numeric token tables do not reliably pronounce values
+       such as 140. Spell this menu's small numeric ranges explicitly. */
+    static const char *const ones[] = {
+            "zero", "one", "two", "three", "four", "five", "six",
+            "seven", "eight", "nine", "ten", "eleven", "twelve",
+            "thirteen", "fourteen", "fifteen", "sixteen", "seventeen",
+            "eighteen", "nineteen"
+    };
+    static const char *const tens[] = {
+            "", "", "twenty", "thirty", "forty", "fifty", "sixty",
+            "seventy", "eighty", "ninety"
+    };
+    number[0] = '\0';
+    int magnitude = value;
+    if (magnitude < 0) {
+        strlcpy(number, "minus ", size);
+        magnitude = -magnitude;
+    }
+        if (magnitude >= 100) {
+            strlcat(number, ones[magnitude / 100], size);
+            strlcat(number, " hundred", size);
+            magnitude %= 100;
+            if (magnitude) strlcat(number, " ", size);
+        }
+        if (magnitude >= 20) {
+            strlcat(number, tens[magnitude / 10], size);
+            magnitude %= 10;
+            if (magnitude) {
+                strlcat(number, " ", size);
+                strlcat(number, ones[magnitude], size);
+            }
+        } else if (magnitude || !number[0]) {
+            strlcat(number, ones[magnitude], size);
+        }
+}
+
+static void reader_format_speech_setting(void)
+{
+    char number[64];
+    if (reader_speech_menu_index == 0) {
+        reader_format_number_words(reader_volume, number, sizeof(number));
+        snprintf(reader_announcement, sizeof(reader_announcement),
+                 "playback volume. %s percent", number);
+        return;
+    }
+    speech_setting_info_t info;
+    if (!speech_engine_setting_info(NULL, reader_speech_menu_index - 1,
+                                    &info)) {
+        strlcpy(reader_announcement, "speech setting unavailable",
+                sizeof(reader_announcement));
+        return;
+    }
+    int value = reader_speech_values[info.id];
+    if (info.boolean_value)
+        snprintf(reader_announcement, sizeof(reader_announcement), "%s. %s",
+                 info.name, value
+                    ? (info.true_label ? info.true_label : "on")
+                    : (info.false_label ? info.false_label : "off"));
+    else {
+        reader_format_number_words(value, number, sizeof(number));
+        snprintf(reader_announcement, sizeof(reader_announcement), "%s. %s",
+                 info.name, number);
+    }
+}
+
+static void reader_open_speech_menu(void)
+{
+    reader_speech_menu = true;
+    reader_speech_menu_index = 0;
+    reader_format_speech_setting();
     queue_audio(AUDIO_SPEECH, reader_announcement);
 }
 
-static void reader_toggle_substitutions(void)
+static void reader_close_speech_menu(void)
 {
-    reader_substitutions_enabled = !reader_substitutions_enabled;
+    reader_speech_menu = false;
+    strlcpy(reader_announcement, "speech settings",
+            sizeof(reader_announcement));
+    queue_audio(AUDIO_SPEECH, reader_announcement);
+}
+
+static void reader_adjust_speech_setting(int direction)
+{
+    if (reader_speech_menu_index == 0) {
+        if (direction > 0) {
+            reader_volume += reader_volume < 10 ? 2 : 5;
+            if (reader_volume > 100) reader_volume = 100;
+        } else {
+            reader_volume -= reader_volume > 10 ? 5 : 2;
+            if (reader_volume < 2) reader_volume = 2;
+        }
+        reader_schedule_preferences_save();
+        reader_speak_menu_item();
+        return;
+    }
+    speech_setting_info_t info;
+    if (!speech_engine_setting_info(NULL, reader_speech_menu_index - 1,
+                                    &info))
+        return;
+    int value = reader_speech_values[info.id];
+    if (info.boolean_value) value = !value;
+    else {
+        value += direction * info.step;
+        if (value < info.minimum) value = info.minimum;
+        if (value > info.maximum) value = info.maximum;
+    }
+    reader_speech_values[info.id] = value;
+    reader_speech_saved |= 1U << info.id;
+    if (info.id == SPEECH_SETTING_VOICE)
+        reader_speech_voice_changed = true;
+    ++reader_speech_revision;
+    if (info.id == SPEECH_SETTING_RATE) reader_rate = value;
     reader_render_abort = true;
     reader_loaded = false;
     reader_pcm_valid = false;
     reader_schedule_preferences_save();
-    snprintf(reader_announcement, sizeof(reader_announcement),
-             "substitution dictionary. %s",
-             reader_substitutions_enabled ? "on" : "off");
-    queue_audio(AUDIO_SPEECH, reader_announcement);
+    reader_speak_menu_item();
 }
 
 static void reader_toggle_interface_sounds(void)
@@ -3071,6 +3211,8 @@ static void reader_format_status_menu_item(void)
 
 static void reader_speak_status_menu_item(void)
 {
+    if (reader_ui_busy)
+        ++requested_generation;
     reader_menu_announcement_pending = true;
     reader_menu_changed_at = xTaskGetTickCount();
 }
@@ -3229,16 +3371,11 @@ static void reader_toggle_sleep_start_on_boot(void)
 static void reader_adjust_menu_item(int direction)
 {
     switch (reader_menu_items[reader_menu_index]) {
-    case READER_MENU_RATE: reader_change_rate(direction); break;
-    case READER_MENU_VOLUME: reader_change_volume(direction); break;
     case READER_MENU_CLOCK:
         if (reader_have_wifi_config) reader_clock_online = !reader_clock_online;
         else reader_clock_online = false;
         reader_speak_menu_item();
         break;
-    case READER_MENU_SUBSTITUTIONS: reader_toggle_substitutions(); break;
-    case READER_MENU_DICTIONARY_COMMANDS:
-        reader_toggle_dictionary_commands(); break;
     case READER_MENU_INTERFACE_SOUNDS: reader_toggle_interface_sounds(); break;
     case READER_MENU_SECTION_PAUSE: reader_toggle_section_pause(); break;
     case READER_MENU_STARTUP: reader_toggle_startup(); break;
@@ -3336,6 +3473,10 @@ static void reader_start_clock_sync(void)
 
 static void reader_activate_menu_item(void)
 {
+    if (reader_speech_menu) {
+        reader_adjust_speech_setting(1);
+        return;
+    }
     ReaderMenuItem item = reader_menu_items[reader_menu_index];
     if (item == READER_MENU_CLOSE) {
         reader_close_menu();
@@ -3348,6 +3489,8 @@ static void reader_activate_menu_item(void)
                     : item == READER_MENU_REMSOUND ? AUDIO_SWITCH_REMSOUND
                     : AUDIO_SWITCH_TRANSFER,
                     NULL);
+    } else if (item == READER_MENU_SPEECH) {
+        reader_open_speech_menu();
     } else if (item == READER_MENU_STATUS) {
         reader_open_status_menu();
     } else if (item == READER_MENU_CLOCK) {
@@ -3573,6 +3716,7 @@ static void reader_close_menu(void)
 {
     reader_menu_announcement_pending = false;
     reader_status_menu = false;
+    reader_speech_menu = false;
     reader_menu = false;
     reader_ui_tone_pending = reader_interface_sounds;
     strlcpy(reader_announcement, reader_library ? "library" : "reading",
@@ -4256,7 +4400,9 @@ static void reader_button_scan_task(void *argument)
             } else if (stable_key == 0 && previous_key == 3
                        && !left_hold_handled && !locked) {
                 if (reader_menu) {
-                    if (reader_status_menu)
+                    if (reader_speech_menu)
+                        reader_adjust_speech_setting(-1);
+                    else if (reader_status_menu)
                         reader_move_status_item(-1);
                     else
                         reader_adjust_menu_item(-1);
@@ -4288,7 +4434,12 @@ static void reader_button_scan_task(void *argument)
             } else if (stable_key == 0 && previous_key == 2
                        && !up_hold_handled && !locked) {
                 if (reader_menu) {
-                    if (reader_status_menu) {
+                    if (reader_speech_menu) {
+                        size_t count = speech_engine_setting_count(NULL) + 1;
+                        reader_speech_menu_index = reader_speech_menu_index
+                            ? reader_speech_menu_index - 1 : count - 1;
+                        reader_speak_menu_item();
+                    } else if (reader_status_menu) {
                         if (reader_status_menu_index > 0)
                             --reader_status_menu_index;
                         else
@@ -4530,7 +4681,11 @@ static void reader_button_scan_task(void *argument)
             } else if (stable_key != 0 && locked) {
                 printf("BUTTON_IGNORED locked=1 key=%d\n", stable_key);
             } else if (reader_menu && stable_key == 4) {
-                if (reader_status_menu) {
+                if (reader_speech_menu) {
+                    reader_speech_menu_index = (reader_speech_menu_index + 1)
+                        % (speech_engine_setting_count(NULL) + 1);
+                    reader_speak_menu_item();
+                } else if (reader_status_menu) {
                     if (reader_status_menu_index + 1 < READER_STATUS_COUNT)
                         ++reader_status_menu_index;
                     else
@@ -4543,7 +4698,9 @@ static void reader_button_scan_task(void *argument)
                     reader_speak_menu_item();
                 }
             } else if (reader_menu && stable_key == 5) {
-                if (reader_status_menu)
+                if (reader_speech_menu)
+                    reader_adjust_speech_setting(1);
+                else if (reader_status_menu)
                     reader_move_status_item(1);
                 else
                     reader_adjust_menu_item(1);
@@ -4624,7 +4781,10 @@ static void reader_button_scan_task(void *argument)
             && xTaskGetTickCount() - up_started >= pdMS_TO_TICKS(1200)) {
             up_hold_handled = true;
             if (reader_menu && !up_opened_menu) {
-                if (reader_status_menu) {
+                if (reader_speech_menu) {
+                    reader_close_speech_menu();
+                    puts("SPEECH_MENU closed by hold up");
+                } else if (reader_status_menu) {
                     reader_close_status_menu();
                     puts("STATUS_MENU closed by hold up");
                 } else {
@@ -4711,7 +4871,9 @@ static void reader_button_scan_task(void *argument)
                    >= pdMS_TO_TICKS(250)) {
             reader_menu_announcement_pending = false;
             if (reader_menu) {
-                if (reader_status_menu)
+                if (reader_speech_menu)
+                    reader_format_speech_setting();
+                else if (reader_status_menu)
                     reader_format_status_menu_item();
                 else
                     reader_format_menu_item();
@@ -4758,7 +4920,7 @@ void app_main(void)
 {
     adc_oneshot_unit_handle_t adc;
     adc_cali_handle_t calibration = NULL;
-    OldInst *instance;
+    speech_engine_t *instance;
 
     ESP_ERROR_CHECK(init_audio());
 
@@ -4783,18 +4945,17 @@ void app_main(void)
     ESP_ERROR_CHECK(adc_cali_create_scheme_curve_fitting(&cal_cfg,
                                                           &calibration));
 
-    evv_port_start();
-    evvRunStaticInitialisers();
-    instance = eo_new();
+    speech_engine_config_t engine_config = {
+        .pcm = on_speech_pcm,
+        .marker = on_speech_marker,
+    };
+    instance = speech_engine_create(&engine_config);
     if (instance == NULL) {
         ESP_LOGE(TAG, "OpenEVV initialization failed");
         return;
     }
-    eo_registerCallback(instance, on_message, NULL);
-    ESP_ERROR_CHECK(ev_setOutputBuffer(instance, FRAME_SAMPLES, mono_frame)
-                        ? ESP_OK : ESP_FAIL);
     /* Deliberately relaxed for the first public hardware demonstration. */
-    ESP_ERROR_CHECK(vc_setVoiceParam(instance, 0, VOICE_SPEED, 90)
+    ESP_ERROR_CHECK(speech_engine_set(instance, SPEECH_SETTING_RATE, 90)
                         ? ESP_OK : ESP_FAIL);
 
     audio_queue = xQueueCreate(1, sizeof(AudioEvent));
@@ -4826,27 +4987,73 @@ void app_main(void)
     }
 }
 #else
-static OldInst *reader_create_engine(void)
+static speech_engine_t *reader_create_engine(void)
 {
-    OldInst *instance = eo_new();
+    speech_engine_config_t config = {
+        .pcm = on_speech_pcm,
+        .marker = on_speech_marker,
+    };
+    speech_engine_t *instance = speech_engine_create(&config);
     if (!instance)
         return NULL;
-    eo_registerCallback(instance, on_message, NULL);
-    if (!ev_setOutputBuffer(instance, FRAME_SAMPLES, mono_frame)
-        || !vc_setVoiceParam(instance, 0, VOICE_SPEED, reader_rate)
-        || vc_setVoiceParam(instance, 0, VOICE_VOLUME,
-                            ENGINE_VOLUME_MAX) < 0) {
-        (void)es_delete(instance);
-        return NULL;
+    size_t count = speech_engine_setting_count(instance);
+    for (size_t i = 0; i < count; ++i) {
+        speech_setting_info_t info;
+        int value;
+        if (!speech_engine_setting_info(instance, i, &info)) continue;
+        if ((reader_speech_saved & (1U << info.id))
+            && reader_speech_values[info.id] >= info.minimum
+            && reader_speech_values[info.id] <= info.maximum) {
+            value = reader_speech_values[info.id];
+            if (!speech_engine_set(instance, info.id, value)) {
+                speech_engine_destroy(instance);
+                return NULL;
+            }
+        } else if (speech_engine_get(instance, info.id, &value)) {
+            reader_speech_values[info.id] = value;
+            reader_speech_saved |= 1U << info.id;
+        } else reader_speech_values[info.id] = info.default_value;
     }
-    OI_ENV(instance)[ENV_PHRASE_PREDICTION] = 0;
-    OI_ENV_SAVED(instance)[ENV_PHRASE_PREDICTION] = 1;
-    if (api_set_param(OI_NEW(instance), 0,
-                      PARAM_PHRASE_PREDICTION, 0) != 0) {
-        (void)es_delete(instance);
-        return NULL;
-    }
+    reader_rate = reader_speech_values[SPEECH_SETTING_RATE];
+    reader_dictionary_annotations = reader_substitution_count
+        && speech_engine_supports_annotations(instance);
+    (void)speech_engine_set(instance, SPEECH_SETTING_ANNOTATED_INPUT,
+                            reader_dictionary_annotations ? 1 : 0);
     return instance;
+}
+
+static bool reader_apply_speech_profile(speech_engine_t *instance)
+{
+    size_t count = speech_engine_setting_count(instance);
+    bool refresh_voice = reader_speech_voice_changed;
+    for (size_t i = 0; i < count; ++i) {
+        speech_setting_info_t info;
+        if (!speech_engine_setting_info(instance, i, &info)) continue;
+        if (refresh_voice && info.id != SPEECH_SETTING_VOICE
+            && info.id != SPEECH_SETTING_RATE
+            && info.id != SPEECH_SETTING_ENGINE_VOLUME
+            && (info.id == SPEECH_SETTING_GENDER
+                || info.id == SPEECH_SETTING_HEAD_SIZE
+                || info.id == SPEECH_SETTING_PITCH
+                || info.id == SPEECH_SETTING_PITCH_FLUCTUATION
+                || info.id == SPEECH_SETTING_ROUGHNESS
+                || info.id == SPEECH_SETTING_BREATHINESS)) {
+            int preset_value;
+            if (!speech_engine_get(instance, info.id, &preset_value))
+                return false;
+            reader_speech_values[info.id] = preset_value;
+            reader_speech_saved |= 1U << info.id;
+            continue;
+        }
+        if ((reader_speech_saved & (1U << info.id))
+            && !speech_engine_set(instance, info.id,
+                                  reader_speech_values[info.id]))
+            return false;
+    }
+    reader_speech_voice_changed = false;
+    if (refresh_voice)
+        reader_schedule_preferences_save();
+    return true;
 }
 
 #define BOOT_REQUEST_TRANSFER UINT32_C(0x45565654)
@@ -4975,7 +5182,7 @@ static network_config_result_t reader_check_remsound_config(void)
                                  "host=", "password=");
 }
 
-static void reader_perform_unlock_action(OldInst *instance,
+static void reader_perform_unlock_action(speech_engine_t *instance,
                                          uint32_t generation)
 {
     if (!reader_unlock_action_pending) return;
@@ -5017,7 +5224,8 @@ static void reader_perform_unlock_action(OldInst *instance,
                      "%s. %s", time_text, battery);
         }
     }
-    ESP_ERROR_CHECK(vc_setVoiceParam(instance, 0, VOICE_SPEED, reader_rate)
+    ESP_ERROR_CHECK(speech_engine_set(instance, SPEECH_SETTING_RATE,
+                                     reader_rate)
                         ? ESP_OK : ESP_FAIL);
     (void)speak(instance, reader_announcement, generation);
     reader_stop_audio();
@@ -5262,10 +5470,8 @@ static bool reader_play_media(uint32_t generation)
 static void reader_engine_task(void *arg)
 {
     (void)arg;
-    OldInst *instance;
+    speech_engine_t *instance;
 
-    evv_port_start();
-    evvRunStaticInitialisers();
     instance = reader_create_engine();
     if (instance == NULL) {
         ESP_LOGE(TAG, "OpenEVV initialization failed");
@@ -5273,16 +5479,11 @@ static void reader_engine_task(void *arg)
     }
     esp_audio_dec_register_default();
     esp_audio_simple_dec_register_default();
-    /* The new API's general parameter 13 is `pp`, but the compatibility
-       wrapper stores it in environment word 11 and its public setter refuses
-       that word. Keep both representations aligned so a later environment
-       flush cannot silently restore phrase prediction. */
-    int32_t pp_rc = 0;
-    printf("ENGINE_VOLUME value=%d PHRASE_PREDICTION value=%ld env=%ld rc=%ld\n",
-           ENGINE_VOLUME_MAX,
-           (long)0,
-           (long)OI_ENV(instance)[ENV_PHRASE_PREDICTION],
-           (long)pp_rc);
+    printf("SPEECH_ENGINE name=%s sample_rate=%u engine_volume=%d "
+           "phrase_prediction=0 settings=%u\n",
+           speech_engine_name(instance),
+           speech_engine_sample_rate(instance), ENGINE_VOLUME_MAX,
+           (unsigned)speech_engine_setting_count(instance));
 
     reader_controls_ready = true;
     printf("ROLLING_READER_READY engine_core=%d centre=load_then_play left_right=volume up_down=rate\n",
@@ -5297,6 +5498,14 @@ static void reader_engine_task(void *arg)
                        (unsigned long)event.generation,
                        (unsigned long)requested_generation);
             continue;
+        }
+        static uint32_t applied_speech_revision;
+        if (applied_speech_revision != reader_speech_revision) {
+            if (!reader_apply_speech_profile(instance)) {
+                ESP_LOGE(TAG, "could not apply speech settings");
+                continue;
+            }
+            applied_speech_revision = reader_speech_revision;
         }
         reader_ui_busy = event.kind != AUDIO_PARAGRAPH;
         if (event.kind == AUDIO_MEDIA_PLAY) {
@@ -5471,7 +5680,7 @@ static void reader_engine_task(void *arg)
             }
             if (instant_advance) opening_started_us = load_started_us;
             int64_t synthesis_started_us = esp_timer_get_time();
-            ESP_ERROR_CHECK(vc_setVoiceParam(instance, 0, VOICE_SPEED,
+            ESP_ERROR_CHECK(speech_engine_set(instance, SPEECH_SETTING_RATE,
                                              reader_rate)
                                 ? ESP_OK : ESP_FAIL);
             if (!reader_load_book(instance, event.generation)) {
@@ -5510,17 +5719,23 @@ static void reader_engine_task(void *arg)
                 ESP_LOGE(TAG, "could not reset audio output");
                 continue;
             }
+            printf("NAV_SPEECH audio_reset play_task=%d rendering=%d\n",
+                   reader_play_task_running, reader_rendering);
             if (reader_rendering)
                 reader_finish_book_render(instance);
-            ESP_ERROR_CHECK(vc_setVoiceParam(instance, 0, VOICE_SPEED,
+            ESP_ERROR_CHECK(speech_engine_set(instance, SPEECH_SETTING_RATE,
                                              reader_rate)
                                 ? ESP_OK : ESP_FAIL);
             if (reader_interface_sounds)
                 (void)play_wav_tone_limited(keypress_wav_start,
                                             keypress_wav_end,
                                             event.generation, 80);
-            (void)reader_speak_buffered(instance, event.text,
-                                        event.generation);
+            bool navigation_spoken = reader_speak_buffered(
+                instance, event.text, event.generation);
+            printf("NAV_SPEECH complete generation=%lu spoken=%d samples=%u requested=%lu\n",
+                   (unsigned long)event.generation, navigation_spoken,
+                   (unsigned)reader_pcm_samples,
+                   (unsigned long)requested_generation);
             if (reader_resume_after_navigation_speech) {
                 reader_resume_after_navigation_speech = false;
                 reader_resume_after_load = true;
@@ -5588,7 +5803,8 @@ static void reader_engine_task(void *arg)
                 ESP_LOGE(TAG, "could not reset audio output");
                 continue;
             }
-            ESP_ERROR_CHECK(vc_setVoiceParam(instance, 0, VOICE_SPEED, reader_rate)
+            ESP_ERROR_CHECK(speech_engine_set(instance, SPEECH_SETTING_RATE,
+                                             reader_rate)
                                 ? ESP_OK : ESP_FAIL);
             (void)speak(instance, event.text, event.generation);
             reader_stop_audio();
@@ -5695,14 +5911,12 @@ void app_main(void)
     /* These are staging buffers rather than DMA descriptors. Keeping them in
        PSRAM preserves scarce internal RAM for OpenEVV's deferred locks while
        allowing the faster 32 KB instruction-cache configuration. */
-    mono_frame = heap_caps_malloc(FRAME_SAMPLES * sizeof(*mono_frame),
-                                  MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     stereo_frame = heap_caps_malloc(FRAME_SAMPLES * 2 * sizeof(*stereo_frame),
                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     reader_playback_frame = heap_caps_malloc(
         FRAME_SAMPLES * 2 * sizeof(*reader_playback_frame),
         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    ESP_ERROR_CHECK(mono_frame && stereo_frame && reader_playback_frame
+    ESP_ERROR_CHECK(stereo_frame && reader_playback_frame
                     ? ESP_OK : ESP_ERR_NO_MEM);
 
     /* I2S is deliberately created on core 0. Its interrupt remains separate

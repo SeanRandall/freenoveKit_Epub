@@ -4,11 +4,25 @@ const progressNode = document.querySelector("#progress");
 const installButton = document.querySelector("#install");
 const deviceNode = document.querySelector("#device");
 
-const filesFor = language => [
+const readerImages = {
+  "openevv:en-US": "reader-en-US.bin",
+  "openevv:en-GB": "reader-en-GB.bin",
+  "openevv:fr-FR": "reader-fr-FR.bin",
+  "pico:en-US": "reader-pico-en-US.bin",
+  "pico:en-GB": "reader-pico-en-GB.bin",
+  "pico:de-DE": "reader-pico-de-DE.bin",
+  "pico:es-ES": "reader-pico-es-ES.bin",
+  "pico:fr-FR": "reader-pico-fr-FR.bin",
+  "pico:it-IT": "reader-pico-it-IT.bin",
+  "dectalk:dtc01-en-US": "reader-dectalk-dtc01-en-US.bin",
+  "openbst:1998ENG": "reader-openbst-1998ENG.bin",
+};
+
+const filesFor = selection => [
   ["firmware/bootloader.bin", 0x0000],
   ["firmware/partition-table.bin", 0x8000],
   ["firmware/ota_data_initial.bin", 0xd000],
-  [`firmware/reader-${language}.bin`, 0x10000],
+  [`firmware/${readerImages[selection]}`, 0x10000],
   ["firmware/network-services.bin", 0x610000],
 ];
 
@@ -39,9 +53,11 @@ installButton.addEventListener("click", async () => {
       : "EVV0000";
     deviceNode.innerHTML = `<strong>Device:</strong> ${deviceId} (ESP32-S3)`;
     statusNode.textContent = `Connected to ${deviceId}.`;
-    const language = document.querySelector('input[name="language"]:checked').value;
+    const selectedFirmware = document.querySelector('input[name="firmware"]:checked');
+    if (!selectedFirmware || !readerImages[selectedFirmware.value])
+      throw new Error("Choose a speech engine and voice variant first.");
     statusNode.textContent = "Downloading firmware.";
-    const fileArray = await Promise.all(filesFor(language).map(loadFile));
+    const fileArray = await Promise.all(filesFor(selectedFirmware.value).map(loadFile));
     await loader.writeFlash({
       fileArray,
       flashSize: "16MB",
