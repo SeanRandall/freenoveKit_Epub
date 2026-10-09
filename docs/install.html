@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en-GB">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Install Retroreader</title><link rel="stylesheet" href="style.css"></head>
+<body>
+  <a class="skip-link" href="#content">Skip to content</a>
+  <header class="site-header"><a class="brand" href="index.html">Retroreader</a><nav aria-label="Main navigation"><a href="index.html">Home</a><a href="compare.html">Compare</a><a href="voices.html">Voice samples</a><a aria-current="page" href="install.html">Install</a><a href="reader-guide.html">Guide</a><a href="about.html">About Sean</a><a href="https://github.com/SeanRandall/freenoveKit_Epub">GitHub</a></nav></header>
+  <main id="content">
+    <h1>Install Retroreader</h1><p>Connect the 1.14-inch Freenove Media Kit with a data-capable USB cable. The web installer requires a browser with Web Serial support, such as desktop Chrome or Edge, and a secure web page.</p>
+    <h2>Choose a speech engine and voice</h2><p>Open an engine below, then choose a voice variant.</p>
+    <details open><summary>OpenEVV</summary><fieldset><legend>OpenEVV voice variant</legend><label><input type="radio" name="firmware" value="openevv:en-US" checked> US English</label></fieldset></details>
+    <details><summary>Pico</summary><fieldset><legend>Pico voice variant</legend><label><input type="radio" name="firmware" value="pico:en-US"> US English</label></fieldset></details>
+    <details><summary>DECtalk</summary><fieldset><legend>DECtalk build variant</legend><label><input type="radio" name="firmware" value="dectalk:dtc01-en-US"> DTC-01 US English</label></fieldset></details>
+    <details><summary>OpenBST</summary><fieldset><legend>OpenBST build variant</legend><label><input type="radio" name="firmware" value="openbst:1998ENG"> 1998 English</label></fieldset></details>
+    <button id="install">Connect and install</button><progress id="progress" max="100" value="0"><span>0%</span></progress><p id="device"><strong>Device:</strong> not connected</p><p id="status">Ready.</p>
+    <details><summary>Troubleshooting</summary><p>If connection fails, hold BOOT, briefly press RESET, release BOOT, then try again. If the installer finishes but the reader does not restart automatically, briefly press RESET. Flashing does not alter the SD card.</p></details>
+    <h2>Documentation</h2><ul><li><a href="reader-guide.html">Retroreader guide</a></li><li><a href="physical-description.html">Freenove kit physical description</a></li></ul>
+  </main>
+  <footer><p>&copy; 2026 <a href="https://uk.linkedin.com/in/accessiblesean">Sean Randall</a>. Retroreader is an open-source project.</p></footer><script type="module" src="installer.js"></script>
+</body></html>

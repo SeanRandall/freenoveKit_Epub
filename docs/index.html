@@ -1,57 +1,14 @@
 <!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Install EVV Reader</title>
-  <link rel="stylesheet" href="style.css">
-</head>
+<html lang="en-GB">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="description" content="Retroreader is open-source ebook reading software for the Freenove Media Kit, built around familiar retro speech synthesizers."><title>Retroreader — portable reading with classic speech</title><link rel="stylesheet" href="style.css"></head>
 <body>
-  <main>
-    <h1>Install EVV Reader</h1>
-    <p>Connect the 1.14-inch Freenove Media Kit with a data-capable USB cable. This installer requires Chrome or Edge and a secure web page.</p>
-    <h2>Choose a speech engine and voice</h2>
-    <p>Open an engine below, then choose a voice variant.</p>
-    <details open>
-      <summary>OpenEVV</summary>
-      <fieldset>
-        <legend>OpenEVV voice variant</legend>
-        <label><input type="radio" name="firmware" value="openevv:en-US" checked> US English</label>
-      </fieldset>
-    </details>
-    <details>
-      <summary>Pico</summary>
-      <fieldset>
-        <legend>Pico voice variant</legend>
-        <label><input type="radio" name="firmware" value="pico:en-US"> US English</label>
-      </fieldset>
-    </details>
-    <details>
-      <summary>DECtalk</summary>
-      <fieldset>
-        <legend>DECtalk build variant</legend>
-        <label><input type="radio" name="firmware" value="dectalk:dtc01-en-US"> DTC-01 US English</label>
-      </fieldset>
-    </details>
-    <details>
-      <summary>OpenBST</summary>
-      <fieldset>
-        <legend>OpenBST build variant</legend>
-        <label><input type="radio" name="firmware" value="openbst:1998ENG"> 1998 English</label>
-      </fieldset>
-    </details>
-    <button id="install">Connect and install</button>
-    <progress id="progress" max="100" value="0"></progress>
-    <p id="device"><strong>Device:</strong> not connected</p>
-    <p id="status">Ready.</p>
-    <details><summary>Troubleshooting</summary><p>If connection fails, hold BOOT, briefly press RESET, release BOOT, then try again. If the installer finishes but the reader does not restart automatically, briefly press RESET. Flashing does not alter the SD card.</p></details>
-    <h2>Documentation</h2>
-    <ul>
-      <li><a href="reader-guide.html">EVV Reader guide</a></li>
-      <li><a href="physical-description.html">Freenove kit physical description</a></li>
-      <li><a href="https://github.com/SeanRandall/freenoveKit_Epub">EVV Reader source code and releases on GitHub</a></li>
-    </ul>
+  <a class="skip-link" href="#content">Skip to content</a>
+  <header class="site-header"><a class="brand" href="index.html">Retroreader</a><nav aria-label="Main navigation"><a aria-current="page" href="index.html">Home</a><a href="compare.html">Compare</a><a href="voices.html">Voice samples</a><a href="install.html">Install</a><a href="reader-guide.html">Guide</a><a href="about.html">About Sean</a><a href="https://github.com/SeanRandall/freenoveKit_Epub">GitHub</a></nav></header>
+  <main id="content">
+    <section class="hero"><p class="eyebrow">Open-source, speech-first reading</p><h1>Carry a classic reading voice in your pocket</h1><p class="lede">Retroreader is software for the Freenove Media Kit that lets you listen to EPUB ebooks and plain-text files using retro speech synthesizers.</p><p><a class="button" href="install.html">Install Retroreader</a> <a class="secondary-link" href="reader-guide.html">Read the guide</a></p></section>
+    <section><h2>Why Retroreader?</h2><p>Retroreader was inspired by my introduction to the Road Runner and Book Courier reading machines from Ostrich Software and Springer Design, popular around the turn of the century. Those machines made electronic text portable, tactile and immediate.</p><p>Retroreader gives blind readers a low-cost, open-source software stack for taking old, beloved voices on the move. It combines speech engines familiar to long-term screen-reader users with Freenove hardware made for programmers and tinkerers.</p></section>
+    <section class="feature-grid" aria-label="Highlights"><article><h2>Familiar voices</h2><p>Choose from supported speech synthesizers, including OpenEVV, Pico, DECtalk and OpenBST builds. The aim is fast, intelligible reading—not an imitation human narrator.</p></article><article><h2>Physical controls</h2><p>Browse, read, pause, seek and change settings from a compact five-way control, with speech throughout the interface.</p></article><article><h2>Your files, your device</h2><p>Books live on a microSD card. The project is open source, the file layout is inspectable, and the software is designed to be adapted.</p></article></section>
+    <section class="notice"><h2>An alpha project</h2><p>Retroreader is experimental software for hobbyist hardware, not a finished commercial appliance. Expect rough edges, keep backups, and join the project if you enjoy testing or building accessible technology.</p></section>
   </main>
-  <script type="module" src="installer.js"></script>
-</body>
-</html>
+  <footer><p>&copy; 2026 <a href="https://uk.linkedin.com/in/accessiblesean">Sean Randall</a>. Retroreader is an open-source project.</p></footer>
+</body></html>

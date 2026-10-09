@@ -1,4 +1,4 @@
-# EVV Reader web installer
+# Retroreader website and web installer
 
 This directory is ready to publish with GitHub Pages. Select the repository's
 `main` branch and `/docs` folder under **Settings, Pages**.
