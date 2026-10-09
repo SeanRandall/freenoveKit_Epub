@@ -7,3 +7,6 @@
 [submodule "vendor/dectalk-dtc01-reborn"]
 	path = vendor/dectalk-dtc01-reborn
 	url = https://github.com/rommix0/DECtalk-DTC-01-Reborn.git
+[submodule "vendor/provoice-reborn"]
+	path = vendor/provoice-reborn
+	url = https://github.com/rommix0/First-Byte-ProVoice-Reborn.git

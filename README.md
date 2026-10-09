@@ -63,10 +63,11 @@ repository or its public firmware images.
 
 ## Install the firmware
 
-Use the [browser-based firmware installer](https://seanrandall.github.io/freenoveKit_Epub/)
+Use the [browser-based firmware installer](https://retroreader.uk/install.html)
 in a current desktop Chrome or Edge browser on Windows, macOS, Linux or
-ChromeOS. It includes all three voice choices, the reader guide and a physical
-description of the Freenove kit.
+ChromeOS. It groups firmware choices by speech engine and voice or build
+variant, and includes the reader guide and a physical description of the
+Freenove kit.
 
 Windows users can instead download the standalone installer and firmware from
 the [latest GitHub release](https://github.com/SeanRandall/freenoveKit_Epub/releases/latest).
@@ -74,13 +75,9 @@ the [latest GitHub release](https://github.com/SeanRandall/freenoveKit_Epub/rele
 Download these two files from the "release" directory:
 
 1. "EVV-Reader-Installer.exe"
-2. One firmware image:
-   - "freenoveKit_Epub-en-US.bin" — US English voice and English interface
-   - "freenoveKit_Epub-en-GB.bin" — British English voice and English interface
-   - "freenoveKit_Epub-fr-FR.bin" — French voice with an **English interface**
-
-The French firmware speaks book text in French, but its menus and fixed status
-messages have not yet been translated.
+2. One complete firmware image for the desired speech engine and voice or
+   build variant. The filenames and available variants are documented in
+   `release/README.txt`.
 
 Connect the kit via USB, then run
 "EVV-Reader-Installer.exe". Choose the downloaded ".bin" in the standard
@@ -144,7 +141,10 @@ idf.py -B build-transfer -D EVV_APP_SOURCE=webdav_transfer_main.c "
 
 
 The OpenEVV tree under "vendor/openevv-perf" includes the ESP32-specific
-changes required by this firmware. It is separated deliberately; eventually we'll add firmware with different synthesizers, as we do with different languages. 
+changes required by this firmware. Pico, OpenBST, DECtalk DTC-01 Reborn and
+First Byte ProVoice Reborn are pinned as upstream Git submodules for the
+alternative-engine builds. The First Byte engine is exposed as Monologue and
+uses the compact XEN11K8 English voice package.
 
 The project firmware is MIT licensed. Vendored OpenEVV files retain their own
 MIT licence and notices.

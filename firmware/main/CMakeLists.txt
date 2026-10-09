@@ -4,7 +4,7 @@ set(EVV_APP_SOURCE "paragraph_reader_stable_main.c" CACHE STRING
 set(EVV_LANGUAGE "enus" CACHE STRING
     "OpenEVV language module to compile (for example enus, engb or frfr)")
 set(EVV_SPEECH_ENGINE "openevv" CACHE STRING
-    "Speech backend to compile (openevv, pico, openbst or dectalk)")
+    "Speech backend to compile (openevv, pico, openbst, dectalk or monologue)")
 set(EVV_PICO_VOICE "en-US" CACHE STRING
     "Pico voice variant (en-US, en-GB, de-DE, es-ES, fr-FR or it-IT)")
 set(EVV_OPENBST_BUILD "1998ENG" CACHE STRING
@@ -170,6 +170,31 @@ elseif(EVV_SPEECH_ENGINE STREQUAL "dectalk")
         "${DECTALK_ROOT}/src/speech"
         "${DECTALK_ROOT}/src/kernel")
     list(APPEND APP_REQUIREMENTS pthread)
+elseif(EVV_SPEECH_ENGINE STREQUAL "monologue")
+    set(MONOLOGUE_ROOT
+        "${CMAKE_CURRENT_LIST_DIR}/../../vendor/provoice-reborn")
+    set(MONOLOGUE_SOURCES
+        ${MONOLOGUE_ROOT}/src/backend.c
+        ${MONOLOGUE_ROOT}/src/ctype.c
+        ${MONOLOGUE_ROOT}/src/data.c
+        ${MONOLOGUE_ROOT}/src/intonation.c
+        ${MONOLOGUE_ROOT}/src/params.c
+        ${MONOLOGUE_ROOT}/src/phon.c
+        ${MONOLOGUE_ROOT}/src/queue.c
+        ${MONOLOGUE_ROOT}/src/render.c
+        ${MONOLOGUE_ROOT}/src/rulepass.c
+        ${MONOLOGUE_ROOT}/src/rules.c
+        ${MONOLOGUE_ROOT}/src/synth.c
+        ${MONOLOGUE_ROOT}/src/textedit.c
+        ${MONOLOGUE_ROOT}/src/util.c
+        ${MONOLOGUE_ROOT}/standalone/globals.c)
+    list(APPEND APP_SOURCES
+        "speech_engine_monologue.c"
+        "monologue_port.c"
+        ${MONOLOGUE_SOURCES})
+    set(SPEECH_INCLUDE_DIRS
+        "${CMAKE_CURRENT_LIST_DIR}/monologue"
+        "${MONOLOGUE_ROOT}/include")
 else()
     message(FATAL_ERROR "Unknown speech backend '${EVV_SPEECH_ENGINE}'")
 endif()
@@ -188,6 +213,11 @@ if(EVV_SPEECH_ENGINE STREQUAL "pico")
     list(APPEND APP_EMBED_FILES
         "../../vendor/picotts/pico/lang/${PICO_TA}"
         "../../vendor/picotts/pico/lang/${PICO_SG}")
+endif()
+
+if(EVV_SPEECH_ENGINE STREQUAL "monologue")
+    list(APPEND APP_EMBED_FILES
+        "../voices/monologue-xen11k8.pack")
 endif()
 
 if("${EVV_APP_SOURCE}" STREQUAL "webdav_transfer_main.c")
