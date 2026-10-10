@@ -171,13 +171,11 @@ elseif(EVV_SPEECH_ENGINE STREQUAL "dectalk")
         "${DECTALK_ROOT}/src/kernel")
     list(APPEND APP_REQUIREMENTS pthread)
 elseif(EVV_SPEECH_ENGINE STREQUAL "dectalk43")
-    # Private experimental port of the proprietary Fonix DECtalk sources.
-    # vendor-private is locally excluded and must never enter a public build.
-    set(DT43_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../vendor-private/dectalk43")
+    set(DT43_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../vendor/dectalk43/src")
     set(DT43_SRC "${DT43_ROOT}/dapi/src")
     set(DT43_SOURCES
-        ${DT43_SRC}/api/ttsapi.c ${DT43_SRC}/api/decstd97.c
-        ${DT43_SRC}/api/init.c ${DT43_SRC}/api/crypt2.c
+        "dectalk43_overrides/ttsapi.c" ${DT43_SRC}/api/decstd97.c
+        "dectalk43_overrides/init.c" ${DT43_SRC}/api/crypt2.c
         ${DT43_SRC}/cmd/cm_char.c ${DT43_SRC}/cmd/cm_main.c
         ${DT43_SRC}/cmd/cm_text.c ${DT43_SRC}/cmd/cm_pars.c
         ${DT43_SRC}/cmd/cm_cmd.c ${DT43_SRC}/cmd/cm_util.c
@@ -192,13 +190,13 @@ elseif(EVV_SPEECH_ENGINE STREQUAL "dectalk43")
         ${DT43_SRC}/lts/lsa_ja.c ${DT43_SRC}/lts/lsa_rtbi.c
         ${DT43_SRC}/lts/lsa_rule.c ${DT43_SRC}/lts/lsa_sl.c
         ${DT43_SRC}/lts/lsa_sp.c ${DT43_SRC}/lts/lsa_task.c
-        ${DT43_SRC}/lts/lsa_us.c ${DT43_SRC}/lts/lsa_util.c
-        ${DT43_SRC}/lts/lsw_main.c ${DT43_SRC}/lts/ls_chari.c
+        ${DT43_SRC}/lts/lsa_us.c "dectalk43_overrides/lsa_util.c"
+        "dectalk43_overrides/lsw_main.c" ${DT43_SRC}/lts/ls_chari.c
         ${DT43_SRC}/lts/ls_dict.c ${DT43_SRC}/lts/ls_homo.c
         ${DT43_SRC}/lts/ls_math.c ${DT43_SRC}/lts/ls_proc.c
         ${DT43_SRC}/lts/ls_spel.c ${DT43_SRC}/lts/ls_speli.c
         ${DT43_SRC}/lts/ls_suff.c ${DT43_SRC}/lts/ls_suffi.c
-        ${DT43_SRC}/lts/loaddict.c ${DT43_SRC}/lts/ls_rtabi.c
+        "dectalk43_overrides/loaddict.c" ${DT43_SRC}/lts/ls_rtabi.c
         ${DT43_SRC}/ph/ph_aloph.c ${DT43_SRC}/ph/ph_claus.c
         ${DT43_SRC}/ph/ph_draw.c ${DT43_SRC}/ph/ph_drwt0.c
         ${DT43_SRC}/ph/ph_inton.c ${DT43_SRC}/ph/ph_main.c
@@ -213,9 +211,9 @@ elseif(EVV_SPEECH_ENGINE STREQUAL "dectalk43")
         ${DT43_SRC}/hlsyn/inithl.c ${DT43_SRC}/hlsyn/nasalf1x.c
         ${DT43_SRC}/hlsyn/sqrttable.c ${DT43_SRC}/hlsyn/circuit.c
         ${DT43_SRC}/kernel/services.c ${DT43_SRC}/kernel/usa_init.c
-        ${DT43_SRC}/nt/opthread.c ${DT43_SRC}/nt/spc.c
+        "dectalk43_overrides/opthread.c" ${DT43_SRC}/nt/spc.c
         ${DT43_SRC}/nt/pipe.c ${DT43_SRC}/nt/playaud.c
-        ${DT43_SRC}/nt/mmalloc.c ${DT43_SRC}/nt/disable_audio.c
+        ${DT43_SRC}/nt/mmalloc.c "dectalk43_overrides/disable_audio.c"
         ${DT43_SRC}/osf/loadable.c ${DT43_SRC}/osf/dtmmio.c
         ${DT43_SRC}/vtm/vtm.c ${DT43_SRC}/vtm/vtmiont.c
         ${DT43_SRC}/vtm/sync.c ${DT43_SRC}/vtm/playtone.c)
@@ -227,6 +225,7 @@ elseif(EVV_SPEECH_ENGINE STREQUAL "dectalk43")
         ${DT43_SOURCES}
         PROPERTIES COMPILE_DEFINITIONS "__linux__")
     set(SPEECH_INCLUDE_DIRS
+        "${CMAKE_CURRENT_LIST_DIR}/dectalk43_overrides"
         "${DT43_ROOT}" "${DT43_SRC}" "${DT43_SRC}/include"
         "${DT43_SRC}/api" "${DT43_SRC}/cmd" "${DT43_SRC}/kernel"
         "${DT43_SRC}/lts" "${DT43_SRC}/nt" "${DT43_SRC}/osf"
@@ -285,7 +284,7 @@ endif()
 
 if(EVV_SPEECH_ENGINE STREQUAL "dectalk43")
     list(APPEND APP_EMBED_FILES
-        "../../vendor-private/dectalk43/dtalk_us.dic")
+        "../../vendor/dectalk43/ports/emscripten/fs/dtalk_us.dic")
 endif()
 
 if("${EVV_APP_SOURCE}" STREQUAL "webdav_transfer_main.c")

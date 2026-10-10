@@ -7,3 +7,8 @@ firmware.
 
 ESP-IDF and its managed components are downloaded separately during a source
 build and retain their respective licences. They are not vendored here.
+
+`vendor/dectalk43` references the DECtalk 4.3 source maintained by the DECtalk
+project. Retroreader's ESP32 compatibility overrides are stored in
+`firmware/main/dectalk43_overrides`. The upstream licence and notices remain in
+the referenced source tree.

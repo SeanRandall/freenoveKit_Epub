@@ -141,8 +141,8 @@ idf.py -B build-transfer -D EVV_APP_SOURCE=webdav_transfer_main.c "
 
 
 The OpenEVV tree under "vendor/openevv-perf" includes the ESP32-specific
-changes required by this firmware. Pico, OpenBST, DECtalk DTC-01 Reborn and
-First Byte ProVoice Reborn are pinned as upstream Git submodules for the
+changes required by this firmware. Pico, OpenBST, DECtalk DTC-01 Reborn,
+DECtalk 4.3 and First Byte ProVoice Reborn are pinned as upstream Git submodules for the
 alternative-engine builds. The First Byte engine is exposed as Monologue and
 uses the compact XEN11K8 English voice package.
 
