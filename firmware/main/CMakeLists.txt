@@ -4,7 +4,7 @@ set(EVV_APP_SOURCE "paragraph_reader_stable_main.c" CACHE STRING
 set(EVV_LANGUAGE "enus" CACHE STRING
     "OpenEVV language module to compile (for example enus, engb or frfr)")
 set(EVV_SPEECH_ENGINE "openevv" CACHE STRING
-    "Speech backend to compile (openevv, pico, openbst, dectalk or monologue)")
+    "Speech backend to compile (openevv, pico, openbst, dectalk, dectalk43 or monologue)")
 set(EVV_PICO_VOICE "en-US" CACHE STRING
     "Pico voice variant (en-US, en-GB, de-DE, es-ES, fr-FR or it-IT)")
 set(EVV_OPENBST_BUILD "1998ENG" CACHE STRING
@@ -170,6 +170,69 @@ elseif(EVV_SPEECH_ENGINE STREQUAL "dectalk")
         "${DECTALK_ROOT}/src/speech"
         "${DECTALK_ROOT}/src/kernel")
     list(APPEND APP_REQUIREMENTS pthread)
+elseif(EVV_SPEECH_ENGINE STREQUAL "dectalk43")
+    # Private experimental port of the proprietary Fonix DECtalk sources.
+    # vendor-private is locally excluded and must never enter a public build.
+    set(DT43_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../vendor-private/dectalk43")
+    set(DT43_SRC "${DT43_ROOT}/dapi/src")
+    set(DT43_SOURCES
+        ${DT43_SRC}/api/ttsapi.c ${DT43_SRC}/api/decstd97.c
+        ${DT43_SRC}/api/init.c ${DT43_SRC}/api/crypt2.c
+        ${DT43_SRC}/cmd/cm_char.c ${DT43_SRC}/cmd/cm_main.c
+        ${DT43_SRC}/cmd/cm_text.c ${DT43_SRC}/cmd/cm_pars.c
+        ${DT43_SRC}/cmd/cm_cmd.c ${DT43_SRC}/cmd/cm_util.c
+        ${DT43_SRC}/cmd/cm_phon.c ${DT43_SRC}/cmd/cm_copt.c
+        ${DT43_SRC}/cmd/par_pars.c ${DT43_SRC}/cmd/par_ambi.c
+        ${DT43_SRC}/cmd/par_dict.c ${DT43_SRC}/cmd/par_rule.c
+        ${DT43_SRC}/cmd/par_char.c ${DT43_SRC}/cmd/cmd_wav.c
+        ${DT43_SRC}/cmd/cmd_init.c
+        ${DT43_SRC}/lts/lsa_adju.c ${DT43_SRC}/lts/lsa_coni.c
+        ${DT43_SRC}/lts/lsa_fr.c ${DT43_SRC}/lts/lsa_gr.c
+        ${DT43_SRC}/lts/lsa_ir.c ${DT43_SRC}/lts/lsa_it.c
+        ${DT43_SRC}/lts/lsa_ja.c ${DT43_SRC}/lts/lsa_rtbi.c
+        ${DT43_SRC}/lts/lsa_rule.c ${DT43_SRC}/lts/lsa_sl.c
+        ${DT43_SRC}/lts/lsa_sp.c ${DT43_SRC}/lts/lsa_task.c
+        ${DT43_SRC}/lts/lsa_us.c ${DT43_SRC}/lts/lsa_util.c
+        ${DT43_SRC}/lts/lsw_main.c ${DT43_SRC}/lts/ls_chari.c
+        ${DT43_SRC}/lts/ls_dict.c ${DT43_SRC}/lts/ls_homo.c
+        ${DT43_SRC}/lts/ls_math.c ${DT43_SRC}/lts/ls_proc.c
+        ${DT43_SRC}/lts/ls_spel.c ${DT43_SRC}/lts/ls_speli.c
+        ${DT43_SRC}/lts/ls_suff.c ${DT43_SRC}/lts/ls_suffi.c
+        ${DT43_SRC}/lts/loaddict.c ${DT43_SRC}/lts/ls_rtabi.c
+        ${DT43_SRC}/ph/ph_aloph.c ${DT43_SRC}/ph/ph_claus.c
+        ${DT43_SRC}/ph/ph_draw.c ${DT43_SRC}/ph/ph_drwt0.c
+        ${DT43_SRC}/ph/ph_inton.c ${DT43_SRC}/ph/ph_main.c
+        ${DT43_SRC}/ph/ph_romi.c ${DT43_SRC}/ph/ph_setar.c
+        ${DT43_SRC}/ph/ph_sort.c ${DT43_SRC}/ph/ph_syl.c
+        ${DT43_SRC}/ph/ph_syntx.c ${DT43_SRC}/ph/ph_task.c
+        ${DT43_SRC}/ph/ph_timng.c ${DT43_SRC}/ph/ph_vdefi.c
+        ${DT43_SRC}/ph/ph_vset.c ${DT43_SRC}/ph/phinit.c
+        ${DT43_SRC}/ph/phlog.c ${DT43_SRC}/ph/phprint.c
+        ${DT43_SRC}/hlsyn/acxf1c.c ${DT43_SRC}/hlsyn/hlframe.c
+        ${DT43_SRC}/hlsyn/log10table.c ${DT43_SRC}/hlsyn/brent.c
+        ${DT43_SRC}/hlsyn/inithl.c ${DT43_SRC}/hlsyn/nasalf1x.c
+        ${DT43_SRC}/hlsyn/sqrttable.c ${DT43_SRC}/hlsyn/circuit.c
+        ${DT43_SRC}/kernel/services.c ${DT43_SRC}/kernel/usa_init.c
+        ${DT43_SRC}/nt/opthread.c ${DT43_SRC}/nt/spc.c
+        ${DT43_SRC}/nt/pipe.c ${DT43_SRC}/nt/playaud.c
+        ${DT43_SRC}/nt/mmalloc.c ${DT43_SRC}/nt/disable_audio.c
+        ${DT43_SRC}/osf/loadable.c ${DT43_SRC}/osf/dtmmio.c
+        ${DT43_SRC}/vtm/vtm.c ${DT43_SRC}/vtm/vtmiont.c
+        ${DT43_SRC}/vtm/sync.c ${DT43_SRC}/vtm/playtone.c)
+    list(APPEND APP_SOURCES
+        "speech_engine_dectalk43.c" "dectalk43_esp_compat.c"
+        ${DT43_SOURCES})
+    set_source_files_properties(
+        "speech_engine_dectalk43.c" "dectalk43_esp_compat.c"
+        ${DT43_SOURCES}
+        PROPERTIES COMPILE_DEFINITIONS "__linux__")
+    set(SPEECH_INCLUDE_DIRS
+        "${DT43_ROOT}" "${DT43_SRC}" "${DT43_SRC}/include"
+        "${DT43_SRC}/api" "${DT43_SRC}/cmd" "${DT43_SRC}/kernel"
+        "${DT43_SRC}/lts" "${DT43_SRC}/nt" "${DT43_SRC}/osf"
+        "${DT43_SRC}/ph" "${DT43_SRC}/protos" "${DT43_SRC}/vtm"
+        "${DT43_SRC}/hlsyn")
+    list(APPEND APP_REQUIREMENTS pthread)
 elseif(EVV_SPEECH_ENGINE STREQUAL "monologue")
     set(MONOLOGUE_ROOT
         "${CMAKE_CURRENT_LIST_DIR}/../../vendor/provoice-reborn")
@@ -218,6 +281,11 @@ endif()
 if(EVV_SPEECH_ENGINE STREQUAL "monologue")
     list(APPEND APP_EMBED_FILES
         "../voices/monologue-xen11k8.pack")
+endif()
+
+if(EVV_SPEECH_ENGINE STREQUAL "dectalk43")
+    list(APPEND APP_EMBED_FILES
+        "../../vendor-private/dectalk43/dtalk_us.dic")
 endif()
 
 if("${EVV_APP_SOURCE}" STREQUAL "webdav_transfer_main.c")
@@ -287,6 +355,20 @@ if(EVV_SPEECH_ENGINE STREQUAL "dectalk")
         "${DECTALK_ROOT}/src/kernel/kernel.c"
         "${DECTALK_ROOT}/src/speech/engine.c" PROPERTIES
         COMPILE_DEFINITIONS "sem_wait=dtc01_sem_wait")
+endif()
+
+if(EVV_SPEECH_ENGINE STREQUAL "dectalk43")
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE
+        EVV_ENGINE_SAMPLE_RATE=11025 _REENTRANT NOMME LTSSIM TTSSIM
+        ANSI BLD_DECTALK_DLL US_ENGLISH ENGLISH_US ENGLISH ACNA
+        ACCESS32 TYPING_MODE DEC
+        DECTALK_INSTALL_PREFIX="/sdcard/.evv/voices/dectalk43")
+    target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-error=all
+        -Wno-error=pointer-sign -Wno-error=misleading-indentation
+        -Wno-error=missing-braces -Wno-error=unused-label
+        -Wno-error=parentheses -Wno-error=tautological-compare
+        -Wno-error=comment -Wno-error=char-subscripts
+        -Wno-error=dangling-else)
 endif()
 
 if("${EVV_APP_SOURCE}" STREQUAL "webdav_transfer_main.c")
