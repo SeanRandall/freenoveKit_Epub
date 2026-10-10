@@ -101,7 +101,10 @@ static void dt43_callback(LONG first, LONG second, DWORD instance, UINT message)
     if (!engine) engine = active_engine;
     if (!engine) return;
     if (message == TTS_MSG_BUFFER) {
-        TTS_BUFFER_T *buffer = (TTS_BUFFER_T *)(uintptr_t)(uint32_t)first;
+        /* DECtalk 4.3 reports its completed memory buffer in lParam2.
+         * Later forks swapped this convention, which is why the modern
+         * DECtalk adapter uses lParam1. */
+        TTS_BUFFER_T *buffer = (TTS_BUFFER_T *)(uintptr_t)(uint32_t)second;
         if (!buffer) (void)TextToSpeechReturnBuffer(engine->handle, &buffer);
         if (!engine->abort_requested) (void)deliver(engine, buffer);
         queue_buffer(engine);
@@ -174,21 +177,21 @@ bool speech_engine_synthesize(speech_engine_t *engine, const char *text)
     engine->busy = true;
     engine->abort_requested = false;
     engine->delivered_samples = 0;
+    printf("DT43_SPEAK begin bytes=%u\n", (unsigned)strlen(input));
     if (TextToSpeechSpeak(engine->handle, input, TTS_FORCE)
             != MMSYSERR_NOERROR) {
         free(input);
         engine->busy = false;
         return false;
     }
+    printf("DT43_SPEAK queued\n");
     free(input);
-    for (;;) {
-        DWORD ids[1] = { STATUS_SPEAKING };
-        DWORD values[1] = { 0 };
-        (void)TextToSpeechGetStatus(engine->handle, ids, values, 1);
-        if (!values[0]) break;
-        if (engine->abort_requested)
-            (void)TextToSpeechReset(engine->handle, false);
-        vTaskDelay(pdMS_TO_TICKS(2));
+    /* In 4.3 STATUS_SPEAKING is intentionally unsupported for memory
+     * output and always returns 0xffffffff.  Sync is the supported way
+     * to wait for the pipeline and its buffer callbacks to drain. */
+    if (TextToSpeechSync(engine->handle) != MMSYSERR_NOERROR) {
+        engine->busy = false;
+        return false;
     }
     TTS_BUFFER_T *partial = NULL;
     (void)TextToSpeechReturnBuffer(engine->handle, &partial);
