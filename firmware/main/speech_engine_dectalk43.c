@@ -168,7 +168,7 @@ bool speech_engine_synthesize(speech_engine_t *engine, const char *text)
     char *input = malloc(strlen(text) + extra);
     if (!input) return false;
     if (engine->have_marker) {
-        snprintf(input, strlen(text) + extra, "[:in %lu]%s",
+        snprintf(input, strlen(text) + extra, "[:index mark %lu]%s",
                  (unsigned long)engine->pending_marker, text);
         engine->have_marker = false;
     } else {
