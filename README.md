@@ -70,7 +70,7 @@ variant, and includes the reader guide and a physical description of the
 Freenove kit.
 
 Windows users can instead download the standalone installer and firmware from
-the [latest GitHub release](https://github.com/SeanRandall/freenoveKit_Epub/releases/latest).
+the [newest GitHub release](https://github.com/SeanRandall/freenoveKit_Epub/releases).
 
 Download these two files from the "release" directory:
 
