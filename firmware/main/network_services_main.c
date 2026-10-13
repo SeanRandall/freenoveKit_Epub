@@ -90,6 +90,10 @@ static volatile bool remote_stream_active;
 static unsigned remote_stream_writes;
 static unsigned remote_silence_writes;
 static unsigned remote_fifo_underflows;
+static int16_t *announcement_pcm;
+static size_t announcement_pcm_samples;
+static size_t announcement_pcm_capacity;
+static bool capture_announcement;
 
 static void initialise_nvs(void)
 {
@@ -146,6 +150,25 @@ static enum ECICallbackReturn STDCALL waveform(OldInst *voice,
     if (message != eciWaveformBuffer) return eciDataProcessed;
     size_t count = (size_t)parameter;
     if (remote_cancel) return eciDataAbort;
+    if (capture_announcement) {
+        size_t needed = announcement_pcm_samples + count;
+        if (needed > announcement_pcm_capacity) {
+            size_t capacity = announcement_pcm_capacity
+                ? announcement_pcm_capacity * 2 : 32768;
+            while (capacity < needed) capacity *= 2;
+            int16_t *larger = heap_caps_realloc(
+                announcement_pcm, capacity * sizeof(*larger),
+                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            if (!larger) return eciDataAbort;
+            announcement_pcm = larger;
+            announcement_pcm_capacity = capacity;
+        }
+        for (size_t i = 0; i < count; ++i)
+            announcement_pcm[announcement_pcm_samples + i] =
+                (int16_t)(((int32_t)mono[i] * saved_volume) / 100);
+        announcement_pcm_samples += count;
+        return eciDataProcessed;
+    }
     if (is_remote_mode && remote_i2s_mutex) {
         size_t offset = 0;
         remote_stream_active = true;
@@ -255,10 +278,6 @@ static void speak(OldInst *voice, const char *text)
 {
     remote_cancel = false;
     announcement_active = true;
-    /* A press detected while speech is playing must not immediately replay
-       the same announcement.  In particular, Wi-Fi startup can disturb an
-       event queued by the ADC task before transfer mode is ready. */
-    if (!is_remote_mode) xQueueReset(presses);
     if (!is_remote_mode) i2s_channel_enable(audio);
     else {
         size_t text_length = strlen(text);
@@ -311,7 +330,50 @@ static void speak(OldInst *voice, const char *text)
     i2s_channel_write(audio, silence, sizeof(silence), &written, portMAX_DELAY);
     vTaskDelay(pdMS_TO_TICKS(100));
     i2s_channel_disable(audio);
-    if (!is_remote_mode) xQueueReset(presses);
+    announcement_active = false;
+}
+
+static bool render_announcement(OldInst *voice, const char *text)
+{
+    announcement_pcm_samples = 0;
+    capture_announcement = true;
+    bool ok = et_addText(voice, text) && et_synthesize(voice);
+    if (ok) {
+        TickType_t limit = xTaskGetTickCount() + pdMS_TO_TICKS(15000);
+        while (eo_speaking(voice) && xTaskGetTickCount() < limit)
+            vTaskDelay(pdMS_TO_TICKS(1));
+        eo_synchronizeSynth(voice);
+    }
+    capture_announcement = false;
+    printf("TRANSFER announcement_cached samples=%u ms=%u ok=%u\n",
+           (unsigned)announcement_pcm_samples,
+           (unsigned)(announcement_pcm_samples * 1000 / 11025),
+           ok && announcement_pcm_samples ? 1u : 0u);
+    return ok && announcement_pcm_samples;
+}
+
+static void play_announcement(void)
+{
+    if (!announcement_pcm_samples) return;
+    announcement_active = true;
+    ESP_ERROR_CHECK(i2s_channel_enable(audio));
+    for (size_t offset = 0; offset < announcement_pcm_samples;) {
+        size_t count = announcement_pcm_samples - offset;
+        if (count > FRAME_SAMPLES) count = FRAME_SAMPLES;
+        for (size_t i = 0; i < count; ++i)
+            stereo[i * 2] = stereo[i * 2 + 1] =
+                announcement_pcm[offset + i];
+        size_t written = 0;
+        if (i2s_channel_write(audio, stereo, count * 4, &written,
+                              portMAX_DELAY) != ESP_OK)
+            break;
+        offset += count;
+    }
+    static const int16_t silence[512];
+    size_t written = 0;
+    (void)i2s_channel_write(audio, silence, sizeof(silence), &written,
+                            portMAX_DELAY);
+    i2s_channel_disable(audio);
     announcement_active = false;
 }
 
@@ -927,22 +989,35 @@ void app_main(void)
             }
         }
     }
-    char announcement[128];
+    char announcement[160];
     snprintf(announcement, sizeof(announcement),
-             "file transfer ready. device %s. I P address %s",
+             "file transfer ready. device %s. I P address %s. "
+             "Hold centre to exit.",
              status.hostname, status.ip_address);
-    speak(voice, announcement);
+    /* Let Wi-Fi association, mDNS and the HTTP server finish their immediate
+       startup work before synthesis competes with them for CPU time. */
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    if (!render_announcement(voice, announcement))
+        speak(voice, announcement);
+    else
+        play_announcement();
     transfer_ready = true;
     for (;;) {
         int key;
-        if (xQueueReceive(presses, &key, portMAX_DELAY) == pdTRUE
-            && key == 0x101) {
-            transfer_ready = false;
-            speak(voice, "leaving file transfer");
-            transfer_mode_stop();
-            REG_WRITE(RTC_CNTL_STORE1_REG, 0);
-            REG_WRITE(RTC_CNTL_STORE0_REG, BOOT_REQUEST_READER);
-            esp_restart();
+        if (xQueueReceive(presses, &key, portMAX_DELAY) == pdTRUE) {
+            if (key == 0x101) {
+                transfer_ready = false;
+                speak(voice, "leaving file transfer");
+                transfer_mode_stop();
+                REG_WRITE(RTC_CNTL_STORE1_REG, 0);
+                REG_WRITE(RTC_CNTL_STORE0_REG, BOOT_REQUEST_READER);
+                esp_restart();
+            } else {
+                if (announcement_pcm_samples)
+                    play_announcement();
+                else
+                    speak(voice, announcement);
+            }
         }
     }
 }

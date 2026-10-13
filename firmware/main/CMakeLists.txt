@@ -62,6 +62,7 @@ endif()
 set(APP_SOURCES
     "${APP_ENTRY_SOURCE}"
     "transfer_mode.c"
+    "transfer_web.c"
     "epub_text.c"
     )
 

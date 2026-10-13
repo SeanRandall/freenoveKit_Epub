@@ -28,6 +28,7 @@
 #include "lwip/sockets.h"
 #include "lwip/tcp.h"
 #include "sdmmc_cmd.h"
+#include "transfer_web.h"
 
 #define CARD_ROOT "/sdcard"
 #define WIFI_READY BIT0
@@ -498,6 +499,13 @@ static esp_err_t webdav_handler(httpd_req_t *req)
         return httpd_resp_sendstr(req,
             "<?xml version=\"1.0\"?><D:multistatus xmlns:D=\"DAV:\"/>");
     case HTTP_GET:
+        /* Browsers can use the memorable host root while WebDAV clients keep
+           the same collection URL for PROPFIND and all mutation methods. */
+        if (!strcmp(req->uri, "/")) {
+            httpd_resp_set_status(req, "302 Found");
+            httpd_resp_set_hdr(req, "Location", "/web");
+            return httpd_resp_send(req, NULL, 0);
+        }
         return get_handler(req, path, false);
     case HTTP_HEAD:
         return get_handler(req, path, true);
@@ -715,12 +723,22 @@ static esp_err_t transfer_mode_start_internal(const char *fallback_ssid,
        parser can otherwise exhaust the default/8 KiB httpd task stack. */
     http.stack_size = 16384;
     ESP_RETURN_ON_ERROR(httpd_start(&server, &http), TAG, "HTTP server");
+    const httpd_uri_t web = {
+        .uri = "/web", .method = HTTP_GET, .handler = transfer_web_handler,
+    };
+    const httpd_uri_t web_slash = {
+        .uri = "/web/", .method = HTTP_GET, .handler = transfer_web_handler,
+    };
     const httpd_uri_t root = {
         .uri = "/", .method = HTTP_ANY, .handler = webdav_handler,
     };
     const httpd_uri_t wildcard = {
         .uri = "/*", .method = HTTP_ANY, .handler = webdav_handler,
     };
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server, &web), TAG,
+                        "browser file manager");
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server, &web_slash), TAG,
+                        "browser file manager slash alias");
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server, &root), TAG,
                         "root WebDAV handler");
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server, &wildcard), TAG,
