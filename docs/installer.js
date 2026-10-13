@@ -18,6 +18,7 @@ const readerImages = {
   "dectalk:4.3-en-US": "reader-dectalk-4.3-en-US.bin",
   "openbst:1998ENG": "reader-openbst-1998ENG.bin",
   "monologue:xen11k8": "reader-monologue-xen11k8.bin",
+  "truvoice:en-US": "reader-truvoice-en-US.bin",
 };
 
 const filesFor = selection => [

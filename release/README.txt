@@ -24,6 +24,9 @@ OpenBST image:
 Monologue image:
   freenoveKit_Epub-monologue-xen11k8.bin - XEN11K8 English voice and interface
 
+TruVoice image:
+  freenoveKit_Epub-truvoice-en-US.bin - US English voice and interface
+
 All variants currently use the English interface. Book text is spoken by the
 selected engine and voice or build.
 
