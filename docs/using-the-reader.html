@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Using the reader — Retroreader</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip-link" href="#content">Skip to content</a>
+  <header class="site-header"><a class="brand" href="index.html">Retroreader</a><nav aria-label="Main navigation"><a href="index.html">Home</a><a href="get-a-kit.html">Get a kit</a><a href="why-not.html">Why not?</a><a href="compare.html">Compare</a><a href="voices.html">Voice samples</a><a href="install.html">Install</a><a aria-current="page" href="using-the-reader.html">Documentation</a><a href="about.html">About Sean</a><a href="https://github.com/SeanRandall/freenoveKit_Epub">GitHub</a></nav></header>
+  <main id="content">
+    <nav aria-label="Documentation"><h2>Documentation</h2><ul><li><a href="preparing-the-sd-card.html">Preparing the SD card</a></li><li><a href="wireless-file-transfer.html">Wireless file transfer</a></li><li><a href="using-the-reader.html">Using the reader</a></li><li><a href="physical-description.html">Physical description</a></li></ul></nav>
+    <h1>Using the reader</h1>
+<p>This is the Markdown source for Retroreader's current operating guide. Retroreader remains alpha software, so controls and announcements may change.</p>
+<h2>Orientation and controls</h2>
+<p>Hold the unit with its screen at the top and exposed USB-C connector at the bottom. The headphone socket and microSD-card slot are along the top edge. The five-way navigation control presses Up, Right, Down, Left and inward for Centre.</p>
+<p>The rear Reset button immediately restarts the unit. The separate power button cuts battery power and cannot be captured by the keypad lock.</p>
+<h2>The library</h2>
+<ul>
+<li>Up and Down move through files and folders.</li>
+<li>Left returns to the containing folder.</li>
+<li>Centre opens the selected item.</li>
+<li>Repeated Right presses report file information and expose file actions.</li>
+<li>Hold Up opens settings.</li>
+<li>Hold Left returns to the previously loaded reading.</li>
+</ul>
+<p>Supported reading material currently includes EPUB, plain text, MP3, M4A and M4B. A configurable recent-files group can appear at the top of the library.</p>
+<h2>Reading EPUB and plain text</h2>
+<ul>
+<li>Centre pauses or resumes.</li>
+<li>Hold Centre locks or unlocks the keypad.</li>
+<li>Hold Left opens the library.</li>
+<li>Hold Up opens settings.</li>
+<li>Down cycles through enabled status information.</li>
+<li>While playing, Up and Down adjust volume.</li>
+<li>Hold Right starts recording; the next button press stops and saves it.</li>
+</ul>
+<p>While paused, Up cycles through available navigation units. Left and Right move through the selected unit. EPUB navigation includes sections and headings. Plain-text navigation includes sentences, paragraphs, form-feed pages when present, and a narrowing percentage search.</p>
+<h2>Playing audio</h2>
+<ul>
+<li>Up and Down adjust volume.</li>
+<li>Centre pauses or resumes.</li>
+<li>Left and Right seek and immediately continue playback.</li>
+<li>Up cycles through 30 seconds, one minute, five minutes and narrowing search. M4B files can also expose chapters.</li>
+<li>Down cycles through enabled status information.</li>
+</ul>
+<h2>Settings</h2>
+<ul>
+<li>Up and Down move through the menu in either direction.</li>
+<li>Left and Right change the focused setting.</li>
+<li>Centre activates or toggles it.</li>
+<li>Hold Up closes the menu and returns to the interface from which it opened.</li>
+</ul>
+<p>The menu includes the sleep timer, speech settings, clock, library sorting, section pauses, startup behaviour, unlock action, recent files, book-opening mode, status items, interface sounds and sleep-timer behaviour. Available speech controls depend on the installed synthesizer.</p>
+<p>The status submenu lets you enable, disable and reorder individual announcements. Network modes appear only when their corresponding configuration files are present on the SD card.</p>
+<h2>Book opening and cache</h2>
+<p>Indexed opening processes a book before reading starts, enabling full navigation and duration estimates immediately. Instant opening begins reading sooner and builds the complete index while paused. Large books take longer the first time. Extracted text, structure and metadata are cached under <code>.evv/.cache</code> on the SD card.</p>
+<p>Clearing the book cache removes generated metadata but does not remove books. Previously processed books then take longer to open again.</p>
+<h2>File transfer and network modes</h2>
+<p>See <a href="wireless-file-transfer.html">Wireless file transfer</a> for browser, Windows, macOS and Linux instructions. NVDA Remote and RemSound use their respective files under <code>.evv</code> and remain hidden when not configured.</p>
+<h2>Recordings</h2>
+<p>Recordings are stored beneath <code>.evv/recordings</code>, grouped by the current book when possible. Back them up: they are personal files and cannot be regenerated from the book cache.</p>
+<h2>Alpha limitations</h2>
+<p>Keep backups of books and recordings. When reporting a fault, include the installed speech engine, the action being performed, the spoken message, whether playback was active or paused, and whether the unit recovered after reset.</p>
+  </main>
+  <footer><p>&copy; 2026 <a href="https://uk.linkedin.com/in/accessiblesean">Sean Randall</a>. Retroreader is an open-source project.</p></footer>
+</body>
+</html>
