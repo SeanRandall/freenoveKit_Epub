@@ -4,6 +4,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 .skip-link { position:absolute; left:.75rem; top:-5rem; padding:.7rem 1rem; background:var(--surface); z-index:10; } .skip-link:focus { top:.75rem; }
 .site-header { display:flex; align-items:baseline; gap:2rem; padding:1rem max(1.25rem,calc((100% - 70rem)/2)); background:var(--accent-strong); color:white; } .brand { color:white; font-size:1.45rem; font-weight:750; text-decoration:none; }
 nav { display:flex; flex-wrap:wrap; gap:.5rem 1.15rem; } nav a { color:white; } nav a[aria-current="page"] { font-weight:700; text-decoration-thickness:.18em; }
+.site-header .nav-disclosure { margin:0; } .site-header .nav-disclosure summary { color:white; } .site-header .nav-disclosure div { display:grid; gap:.4rem; padding:.55rem 0 0 1rem; }
 main { max-width:70rem; margin:0 auto; padding:2.5rem 1.25rem 4rem; } main>* { max-width:48rem; } h1,h2,h3 { line-height:1.2; } h1 { font-size:clamp(2rem,5vw,3.6rem); margin-block:.25rem 1rem; } h2 { margin-top:2.4rem; }
 .hero { max-width:58rem; padding:2.5rem 0; } .eyebrow { color:var(--accent); font-weight:750; letter-spacing:.04em; text-transform:uppercase; } .lede { font-size:1.3rem; color:var(--muted); }
 .button,button { display:inline-block; border:0; border-radius:.3rem; padding:.7rem 1rem; background:var(--accent); color:white; font:inherit; font-weight:700; cursor:pointer; text-decoration:none; } .secondary-link { margin-left:1rem; font-weight:650; }
