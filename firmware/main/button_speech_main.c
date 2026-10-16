@@ -5139,7 +5139,10 @@ static bool reader_apply_speech_profile(speech_engine_t *instance)
                 || info.id == SPEECH_SETTING_PITCH
                 || info.id == SPEECH_SETTING_PITCH_FLUCTUATION
                 || info.id == SPEECH_SETTING_ROUGHNESS
-                || info.id == SPEECH_SETTING_BREATHINESS)) {
+                || info.id == SPEECH_SETTING_BREATHINESS
+                || info.id == SPEECH_SETTING_TONE
+                || info.id == SPEECH_SETTING_ARTICULATION
+                || info.id == SPEECH_SETTING_EXPRESSION)) {
             int preset_value;
             if (!speech_engine_get(instance, info.id, &preset_value))
                 return false;

@@ -28,6 +28,9 @@ Monologue image:
 TruVoice image:
   RetroReader-truvoice-en-US.bin - US English voice and interface
 
+DoubleTalk Hybrid image (experimental):
+  RetroReader-doubletalk-hybrid-en-US.bin - US English voice and interface
+
 All variants currently use the English interface. Book text is spoken by the
 selected engine and voice or build.
 

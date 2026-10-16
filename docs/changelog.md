@@ -46,6 +46,13 @@ Complete images are prepared for:
 - Monologue XEN11K8; and
 - TruVoice US English.
 
+An additional experimental image adds DoubleTalk Hybrid, based on the
+early-1990s RC Systems DoubleTalk PC. It retains the original firmware front
+end for dictionary processing, pronunciation and prosody while replacing the
+sample-by-sample acoustic work with a native ESP32 renderer. Its speech menu
+includes rate, pitch, voice, tone, articulation, expression and a working
+faster-than-stock rate boost.
+
 ### Packaging
 
 - Introduce a dated firmware manifest as the single catalogue used by release

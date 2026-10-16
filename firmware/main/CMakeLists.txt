@@ -267,9 +267,9 @@ elseif(RR_SPEECH_ENGINE STREQUAL "monologue")
         "${MONOLOGUE_ROOT}/include")
 elseif(RR_SPEECH_ENGINE STREQUAL "doubletalk")
     set(DOUBLETALK_ROOT
-        "${CMAKE_CURRENT_LIST_DIR}/../../vendor/doubletalk-pc/doubletalk")
+        "${CMAKE_CURRENT_LIST_DIR}/../../vendor/doubletalk-pc-port/doubletalk")
     set(DOUBLETALK_NATIVE_ROOT
-        "${CMAKE_CURRENT_LIST_DIR}/../../../experiments/doubletalk-native")
+        "${CMAKE_CURRENT_LIST_DIR}/../../vendor/doubletalk-native")
     list(APPEND APP_SOURCES
         "speech_engine_doubletalk.cpp"
         "${DOUBLETALK_ROOT}/shim/emu.cpp"
@@ -278,7 +278,9 @@ elseif(RR_SPEECH_ENGINE STREQUAL "doubletalk")
         "${DOUBLETALK_ROOT}/doubletalk_board.cpp"
         "${DOUBLETALK_ROOT}/dtalk.cpp"
         "${DOUBLETALK_NATIVE_ROOT}/doubletalk_frame.c"
-        "${DOUBLETALK_NATIVE_ROOT}/doubletalk_scheduler.c")
+        "${DOUBLETALK_NATIVE_ROOT}/doubletalk_scheduler.c"
+        "${DOUBLETALK_NATIVE_ROOT}/doubletalk_voice.c"
+        "${DOUBLETALK_NATIVE_ROOT}/doubletalk_utterance.c")
     set(SPEECH_INCLUDE_DIRS
         "${DOUBLETALK_ROOT}"
         "${DOUBLETALK_ROOT}/shim"
@@ -389,7 +391,8 @@ if(RR_SPEECH_ENGINE STREQUAL "doubletalk")
     target_compile_definitions(${COMPONENT_LIB} PRIVATE
         DTALK_HOTBLOCKS=1
         DTALK_NATIVE_DAC_ISR=1
-        DTALK_NATIVE_ACOUSTIC=1)
+        DTALK_NATIVE_ACOUSTIC=1
+        DTALK_FRONTEND_NATIVE=1)
     # ESP-IDF globally suppresses jump tables, but the 80C188 interpreter's
     # central opcode switch is a textbook jump-table workload.  These files
     # are not interrupt handlers, so flash-resident table dispatch is safe and

@@ -9,6 +9,7 @@
     {"id":"dectalk-4.3-en-US","engine":"DECtalk","label":"DECtalk 4.3 US English","image":"RetroReader-dectalk-4.3-en-US.bin","cmake":["RR_SPEECH_ENGINE=dectalk43"]},
     {"id":"openbst-1998ENG","engine":"OpenBST","label":"1998 English","image":"RetroReader-openbst-1998ENG.bin","cmake":["RR_SPEECH_ENGINE=openbst","RR_OPENBST_BUILD=1998ENG"]},
     {"id":"monologue-xen11k8","engine":"Monologue","label":"XEN11K8 English","image":"RetroReader-monologue-xen11k8.bin","cmake":["RR_SPEECH_ENGINE=monologue"]},
-    {"id":"truvoice-en-US","engine":"TruVoice","label":"US English","image":"RetroReader-truvoice-en-US.bin","cmake":["RR_SPEECH_ENGINE=truvoice"]}
+    {"id":"truvoice-en-US","engine":"TruVoice","label":"US English","image":"RetroReader-truvoice-en-US.bin","cmake":["RR_SPEECH_ENGINE=truvoice"]},
+    {"id":"doubletalk-hybrid-en-US","engine":"DoubleTalk Hybrid — experimental","label":"US English","image":"RetroReader-doubletalk-hybrid-en-US.bin","cmake":["RR_SPEECH_ENGINE=doubletalk"]}
   ]
 }
