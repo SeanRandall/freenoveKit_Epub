@@ -19,9 +19,9 @@ to how speech engines and firmware images are packaged.
   automatic pauses. Eloquence fans will want to set this to always for a faster reading experience, which sounds counterintuitive.
 - Improve long-sentence splitting so speech is not unnecessarily broken in
   the middle of a sentence. Examples of this were rare, but it broke my flow.
-- Add an accessible browser file manager at `/web` alongside WebDAV file
-  transfer, with browsing, upload, download, rename, folder creation and
-  deletion.
+- Add an accessible browser file manager alongside WebDAV file transfer, with
+  browsing, upload, download, rename, folder creation and deletion. Opening the
+  reader's address in a web browser forwards to the file manager automatically.
 - Expand the website documentation, installation guidance, speech samples and
   measured speaking-rate information.
 
