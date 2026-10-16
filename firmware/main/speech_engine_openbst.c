@@ -11,8 +11,8 @@
 #ifndef OPENBST_BUILD_NAME
 #define OPENBST_BUILD_NAME "1998ENG"
 #endif
-#ifndef EVV_ENGINE_SAMPLE_RATE
-#define EVV_ENGINE_SAMPLE_RATE 10000
+#ifndef RR_ENGINE_SAMPLE_RATE
+#define RR_ENGINE_SAMPLE_RATE 10000
 #endif
 #define OPENBST_BLOCK_SAMPLES 2048
 
@@ -105,7 +105,7 @@ const char *speech_engine_storage_id(void)
 
 unsigned speech_engine_sample_rate(const speech_engine_t *engine)
 {
-    return engine ? EVV_ENGINE_SAMPLE_RATE : 0;
+    return engine ? RR_ENGINE_SAMPLE_RATE : 0;
 }
 
 bool speech_engine_synthesize(speech_engine_t *engine, const char *text)
@@ -211,3 +211,4 @@ bool speech_engine_supports_annotations(const speech_engine_t *engine)
     (void)engine;
     return false;
 }
+

@@ -1,0 +1,36 @@
+Hello, I am TextTalk, the Dialogic text to speech converter.
+I have an unlimited vocabulary, and I can pronounce any word correctly.
+
+The user can adjust my base pitch. 50 Hertz is the lowest, and
+200 Hertz is the highest. 85 Hertz is normal.
+
+I understand how to expand abbreviations.  English has some tricky abbreviations,
+like "ST" for street, Saint, and 1st.  "DR", for doctor and drive.
+But I can interpret them correctly. I can say, "on the 1st of the month
+Dr. Witzlofsky of Pine St., goes to the St. Anne's Hospital, on Harbor Dr.."
+
+I say numbers differently, depending on context.        
+With no commas, and no dollar sign,  I say, 387876675274.85.  
+With commas, and a dollar sign, I say $387,876,657,675,274.85. 
+
+I say monetary amounts correctly, such as $2,345,678,123.45. 
+I know about units of measure, like ft., mi., kg., and lbs...
+
+I can speak faster, this is 200 words per minute.
+This can be used for rapid scanning of information.
+
+If necessary,
+I can speak slowly, giving the listener time to write down important information ,.
+
+I know how to spell.. For example, wordsmith. ~WORDSMITH..
+
+TextTalk has an intelligent pre-processor
+specifically designed to read E-mail messages.
+
+TextTalk is an implementation of TruVoice, the Centigram Text to speech
+converter with Dialogic boards.
+ 
+For further information on TextTalk, you may contact Dialogic Sales at 
+[3N201-993-3000[3F.  Thank you for your interest in TextTalk.
+
+

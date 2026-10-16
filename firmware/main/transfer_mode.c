@@ -61,8 +61,8 @@ static remsound_address_mode_t read_remsound_address(
     esp_netif_ip_info_t *address)
 {
     static const char *const paths[] = {
-        CARD_ROOT "/.evv/remsound.ini",
-        CARD_ROOT "/.evv/REMSOUND.INI",
+        CARD_ROOT "/.rr/remsound.ini",
+        CARD_ROOT "/.rr/REMSOUND.INI",
     };
     FILE *file = NULL;
     for (size_t i = 0; i < sizeof(paths) / sizeof(paths[0]); ++i) {
@@ -121,10 +121,8 @@ static bool read_wifi_config(char *ssid, size_t ssid_size,
                              char *password, size_t password_size)
 {
     static const char *const paths[] = {
-        CARD_ROOT "/.evv/WIFI.INI",
-        CARD_ROOT "/.evv/wifi.ini",
-        CARD_ROOT "/EVVZERO/WIFI.INI",
-        CARD_ROOT "/EVVZERO/wifi.ini",
+        CARD_ROOT "/.rr/WIFI.INI",
+        CARD_ROOT "/.rr/wifi.ini",
     };
     for (size_t i = 0; i < sizeof(paths) / sizeof(paths[0]); ++i) {
         ssid[0] = 0;
@@ -147,7 +145,7 @@ typedef enum {
 
 static network_mode_t read_network_mode_marker(void)
 {
-    FILE *file = fopen(CARD_ROOT "/.evv/network.mode", "rb");
+    FILE *file = fopen(CARD_ROOT "/.rr/network.mode", "rb");
     if (!file) return NETWORK_MODE_WEBDAV;
     char mode[16] = { 0 };
     bool read = fgets(mode, sizeof(mode), file) != NULL;
@@ -163,10 +161,10 @@ static void make_hostname(char hostname[8])
 {
     uint8_t mac[6];
     if (esp_read_mac(mac, ESP_MAC_WIFI_STA) != ESP_OK) {
-        strlcpy(hostname, "EVV0000", 8);
+        strlcpy(hostname, "RR0000", 8);
         return;
     }
-    snprintf(hostname, 8, "EVV%02X%02X", mac[4], mac[5]);
+    snprintf(hostname, 8, "RR%02X%02X", mac[4], mac[5]);
 }
 
 struct dav_name {
@@ -548,13 +546,13 @@ static esp_err_t webdav_handler(httpd_req_t *req)
     }
     case HTTP_LOCK:
         discard_request_body(req);
-        httpd_resp_set_hdr(req, "Lock-Token", "<opaquelocktoken:evvzero>");
+        httpd_resp_set_hdr(req, "Lock-Token", "<opaquelocktoken:retroreader>");
         httpd_resp_set_type(req, "application/xml");
         return httpd_resp_sendstr(req,
             "<?xml version=\"1.0\"?><D:prop xmlns:D=\"DAV:\"><D:lockdiscovery>"
             "<D:activelock><D:locktype><D:write/></D:locktype><D:lockscope>"
             "<D:exclusive/></D:lockscope><D:depth>infinity</D:depth>"
-            "<D:locktoken><D:href>opaquelocktoken:evvzero</D:href></D:locktoken>"
+            "<D:locktoken><D:href>opaquelocktoken:retroreader</D:href></D:locktoken>"
             "</D:activelock></D:lockdiscovery></D:prop>");
     case HTTP_UNLOCK:
         httpd_resp_set_status(req, "204 No Content");
@@ -609,7 +607,7 @@ static esp_err_t transfer_mode_start_internal(const char *fallback_ssid,
                 sizeof(password));
     }
     ESP_RETURN_ON_FALSE(ssid[0], ESP_ERR_INVALID_STATE, TAG,
-                        "no Wi-Fi credentials; add .evv/WIFI.INI");
+                        "no Wi-Fi credentials; add .rr/WIFI.INI");
     make_hostname(status->hostname);
 
     ESP_RETURN_ON_ERROR(esp_netif_init(), TAG, "network stack");
@@ -691,7 +689,7 @@ static esp_err_t transfer_mode_start_internal(const char *fallback_ssid,
     ESP_RETURN_ON_ERROR(mdns_hostname_set(status->hostname), TAG,
                         "mDNS hostname");
     char instance[32];
-    snprintf(instance, sizeof(instance), "EVVzero %s", status->hostname);
+    snprintf(instance, sizeof(instance), "RetroReader %s", status->hostname);
     ESP_RETURN_ON_ERROR(mdns_instance_name_set(instance), TAG,
                         "mDNS instance");
     if (!start_webdav) {

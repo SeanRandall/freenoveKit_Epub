@@ -4,7 +4,7 @@ Source candidate: `vendor/dectalk-dtc01-reborn`, pinned as a Git submodule.
 It reconstructs DECtalk DTC-01 firmware version 1.8 as C and does not require
 the original ROM images.
 
-## Suitability for EVV Reader
+## Suitability for RetroReader
 
 The public API is a good match for the reader's speech-engine abstraction:
 
@@ -21,7 +21,7 @@ The public API is a good match for the reader's speech-engine abstraction:
 - user dictionaries and DECtalk's inline command language are supported.
 
 The engine produces signed 16-bit PCM at 10,000 Hz. A dedicated DECtalk
-firmware variant should therefore set `EVV_ENGINE_SAMPLE_RATE` to 10000 and
+firmware variant should therefore set `RR_ENGINE_SAMPLE_RATE` to 10000 and
 feed returned buffers through the existing PCM callback. This avoids a
 resampler and keeps the engine's native output intact.
 
@@ -48,3 +48,4 @@ resampler and keeps the engine's native output intact.
 No licence or notice file was present at the pinned upstream revision when it
 was added. Keep the source candidate and any resulting binaries out of public
 releases until the author confirms redistribution terms.
+

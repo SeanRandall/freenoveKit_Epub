@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Extract spoken EVV Reader UI messages into gettext PO/POT catalogues.
+"""Extract spoken RetroReader UI messages into gettext PO/POT catalogues.
 
 The firmware does not link libintl.  PO is the translator-facing interchange
 format; translated strings will be compiled into a small firmware catalogue.
@@ -58,7 +58,7 @@ def candidates(path: Path) -> dict[str, set[int]]:
                 # audible English UI.  Dynamic filenames and values remain
                 # arguments to the surrounding translatable format string.
                 letters = sum(ch.isalpha() for ch in value)
-                if letters < 2 or value.startswith(("/", ".evv")):
+                if letters < 2 or value.startswith(("/", ".rr")):
                     continue
                 found.setdefault(value, set()).add(line)
     for match in UI_ARRAY.finditer(text):
@@ -72,9 +72,9 @@ def candidates(path: Path) -> dict[str, set[int]]:
 
 def header(project: str, language: str = "") -> str:
     result = (
-        '# EVV Reader user-interface messages.\n'
-        '# Copyright (C) EVV Reader contributors\n'
-        '# This file is distributed under the same license as EVV Reader.\n'
+        '# RetroReader user-interface messages.\n'
+        '# Copyright (C) RetroReader contributors\n'
+        '# This file is distributed under the same license as RetroReader.\n'
         'msgid ""\nmsgstr ""\n'
         f'"Project-Id-Version: {project}\\n"\n'
         f'"POT-Creation-Date: {date.today().isoformat()}\\n"\n'
@@ -88,7 +88,7 @@ def header(project: str, language: str = "") -> str:
 
 
 def write_catalog(output: Path, messages: dict[str, set[str]], language: str = "") -> None:
-    chunks = [header("EVV Reader 0.3-alpha", language)]
+    chunks = [header("RetroReader 2026.10.16", language)]
     for message in sorted(messages, key=str.casefold):
         refs = " ".join(sorted(messages[message]))
         chunks.append(f"#: {refs}\nmsgid {po_quote(message)}\nmsgstr \"\"\n\n")
@@ -107,7 +107,7 @@ def main() -> None:
             refs = messages.setdefault(message, set())
             refs.update(f"firmware/main/{path.name}:{line}" for line in lines)
     translations = args.root / "translations"
-    write_catalog(translations / "evvzero.pot", messages)
+    write_catalog(translations / "retroreader.pot", messages)
     french = translations / "fr.po"
     if not french.exists():
         write_catalog(french, messages, "fr")
@@ -116,3 +116,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

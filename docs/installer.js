@@ -3,31 +3,78 @@ const statusNode = document.querySelector("#status");
 const progressNode = document.querySelector("#progress");
 const installButton = document.querySelector("#install");
 const deviceNode = document.querySelector("#device");
+const optionsNode = document.querySelector("#firmware-options");
+const downloadNode = document.querySelector("#firmware-download");
 
-const readerImages = {
-  "openevv:en-US": "reader-en-US.bin",
-  "openevv:en-GB": "reader-en-GB.bin",
-  "openevv:fr-FR": "reader-fr-FR.bin",
-  "pico:en-US": "reader-pico-en-US.bin",
-  "pico:en-GB": "reader-pico-en-GB.bin",
-  "pico:de-DE": "reader-pico-de-DE.bin",
-  "pico:es-ES": "reader-pico-es-ES.bin",
-  "pico:fr-FR": "reader-pico-fr-FR.bin",
-  "pico:it-IT": "reader-pico-it-IT.bin",
-  "dectalk:dtc01-en-US": "reader-dectalk-dtc01-en-US.bin",
-  "dectalk:4.3-en-US": "reader-dectalk-4.3-en-US.bin",
-  "openbst:1998ENG": "reader-openbst-1998ENG.bin",
-  "monologue:xen11k8": "reader-monologue-xen11k8.bin",
-  "truvoice:en-US": "reader-truvoice-en-US.bin",
-};
+let manifest;
+let variants = new Map();
 
-const filesFor = selection => [
-  ["firmware/bootloader.bin", 0x0000],
-  ["firmware/partition-table.bin", 0x8000],
-  ["firmware/ota_data_initial.bin", 0xd000],
-  [`firmware/${readerImages[selection]}`, 0x10000],
-  ["firmware/network-services.bin", 0x610000],
+const filesFor = variant => [
+  [`firmware/${variant.image}`, 0x0000],
 ];
+
+function updateDownload() {
+  const selected = document.querySelector('input[name="firmware"]:checked');
+  const variant = selected && variants.get(selected.value);
+  if (!variant) {
+    downloadNode.hidden = true;
+    return;
+  }
+  downloadNode.href = `firmware/${variant.image}`;
+  downloadNode.download = variant.image;
+  downloadNode.textContent = `Download ${variant.label} complete firmware image`;
+  downloadNode.hidden = false;
+}
+
+function renderVariants(data) {
+  optionsNode.replaceChildren();
+  const engines = new Map();
+  for (const variant of data.variants) {
+    variants.set(variant.id, variant);
+    if (!engines.has(variant.engine)) engines.set(variant.engine, []);
+    engines.get(variant.engine).push(variant);
+  }
+  for (const [engine, choices] of engines) {
+    const details = document.createElement("details");
+    if (choices.some(choice => choice.default)) details.open = true;
+    const summary = document.createElement("summary");
+    summary.textContent = engine;
+    const fieldset = document.createElement("fieldset");
+    const legend = document.createElement("legend");
+    legend.textContent = `${engine} voice variant`;
+    fieldset.append(legend);
+    for (const choice of choices) {
+      const label = document.createElement("label");
+      const radio = document.createElement("input");
+      radio.type = "radio";
+      radio.name = "firmware";
+      radio.value = choice.id;
+      radio.checked = Boolean(choice.default);
+      radio.addEventListener("change", updateDownload);
+      label.append(radio, ` ${choice.label}`);
+      fieldset.append(label);
+    }
+    details.append(summary, fieldset);
+    optionsNode.append(details);
+  }
+  updateDownload();
+}
+
+installButton.disabled = true;
+fetch("firmware-manifest.json", { cache: "no-cache" })
+  .then(response => {
+    if (!response.ok) throw new Error("Could not load the firmware list.");
+    return response.json();
+  })
+  .then(data => {
+    manifest = data;
+    renderVariants(data);
+    statusNode.textContent = `Ready to install ${data.version}.`;
+    installButton.disabled = false;
+  })
+  .catch(error => {
+    statusNode.textContent = `Installer unavailable: ${error.message || error}`;
+  });
 
 async function loadFile([url, address]) {
   const response = await fetch(url, { cache: "no-cache" });
@@ -52,15 +99,16 @@ installButton.addEventListener("click", async () => {
     const mac = await loader.chip.readMac(loader);
     const octets = mac.split(/[:-]/);
     const deviceId = octets.length >= 2
-      ? `EVV${octets.slice(-2).join("").toUpperCase()}`
-      : "EVV0000";
+      ? `RR${octets.slice(-2).join("").toUpperCase()}`
+      : "RR0000";
     deviceNode.innerHTML = `<strong>Device:</strong> ${deviceId} (ESP32-S3)`;
     statusNode.textContent = `Connected to ${deviceId}.`;
     const selectedFirmware = document.querySelector('input[name="firmware"]:checked');
-    if (!selectedFirmware || !readerImages[selectedFirmware.value])
+    const variant = selectedFirmware && variants.get(selectedFirmware.value);
+    if (!variant)
       throw new Error("Choose a speech engine and voice variant first.");
     statusNode.textContent = "Downloading firmware.";
-    const fileArray = await Promise.all(filesFor(selectedFirmware.value).map(loadFile));
+    const fileArray = await Promise.all(filesFor(variant).map(loadFile));
     await loader.writeFlash({
       fileArray,
       flashSize: "16MB",

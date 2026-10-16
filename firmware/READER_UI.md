@@ -1,6 +1,6 @@
-# OpenEVV ESP32 reader UI
+# RetroReader ESP32 reader UI
 
-This document defines the speech-first interface for the ESP32 reader. The hardware is a [Freenove Media Kit](https://store.freenove.com/products/fnk0102), and the text-to-speech output provided by a port of [Openevv](https://github.com/mudb0y/openevv). Usable hardware controls consist of a 5-way d-pad only.
+This document defines RetroReader's speech-first interface on the [Freenove Media Kit](https://store.freenove.com/products/fnk0102). Usable hardware controls consist of a 5-way d-pad only. Speech is provided by the engine selected when the firmware is installed.
  
 
 The interface has three primary places: the reading screen, the library and the
@@ -197,7 +197,7 @@ Unavailable information is spoken as unavailable and is not invented.
 
 ### Speech
 
-The reader sets its speech profile directly on the active OpenEVV instance.
+The reader sets its speech profile through the active engine's common interface.
 `vc_setVoiceParam(instance, 0, parameter, value)` changes the current voice and
 the value remains in force across later `et_addText` and synthesis calls. A
 preset voice is copied into the active voice, then any saved custom values are

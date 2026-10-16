@@ -42,6 +42,7 @@ void evv_port_start(void);
 #define ENV_DICTIONARY 3
 #define ENV_PHRASE_PREDICTION 11
 #define PARAM_PHRASE_PREDICTION 13
+#define PARAM_PAUSE_MODE 33
 
 struct speech_engine {
     OldInst *instance;
@@ -53,7 +54,12 @@ struct speech_engine {
     int voice;
     int phrase_prediction;
     int annotated_input;
+    int pause_mode;
     int voice_params[8];
+};
+
+static const char *const pause_mode_labels[] = {
+    "disabled", "at end of text", "always"
 };
 
 static const speech_setting_info_t settings[] = {
@@ -71,6 +77,8 @@ static const speech_setting_info_t settings[] = {
       true, "off", "on" },
     { SPEECH_SETTING_PHRASE_PREDICTION, "phrase prediction", 0, 1, 1, 0,
       true },
+    { SPEECH_SETTING_PAUSE_MODE, "pause mode", 0, 2, 1, 1, false,
+      NULL, NULL, pause_mode_labels },
 };
 
 static int voice_parameter(speech_setting_id_t setting)
@@ -136,6 +144,7 @@ speech_engine_t *speech_engine_create(const speech_engine_config_t *config)
     engine->volume = engine->voice_params[VOICE_VOLUME];
     engine->native_dictionary = eo_getParam(engine->instance, ENV_DICTIONARY);
     engine->native_dictionary = engine->native_dictionary == 0;
+    engine->pause_mode = eo_getParam(engine->instance, PARAM_PAUSE_MODE);
     engine->voice = 1;
     if (!ev_setOutputBuffer(engine->instance, OPENEVV_FRAME_SAMPLES,
                             engine->pcm)
@@ -236,6 +245,11 @@ bool speech_engine_set(speech_engine_t *engine, speech_setting_id_t setting,
                 return false;
             engine->native_dictionary = value ? 1 : 0;
             return true;
+        case SPEECH_SETTING_PAUSE_MODE:
+            if (ev_setParam(engine->instance, PARAM_PAUSE_MODE, value) < 0)
+                return false;
+            engine->pause_mode = value;
+            return true;
         case SPEECH_SETTING_VOICE:
             if (value < 1 || value > 8
                 || !vc_copyVoice(engine->instance, value, 0))
@@ -269,6 +283,8 @@ bool speech_engine_get(speech_engine_t *engine, speech_setting_id_t setting,
             *value = engine->phrase_prediction; return true;
         case SPEECH_SETTING_NATIVE_DICTIONARY:
             *value = engine->native_dictionary; return true;
+        case SPEECH_SETTING_PAUSE_MODE:
+            *value = engine->pause_mode; return true;
         case SPEECH_SETTING_VOICE: *value = engine->voice; return true;
         case SPEECH_SETTING_ANNOTATED_INPUT:
             *value = engine->annotated_input; return true;

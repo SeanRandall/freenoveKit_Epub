@@ -20,7 +20,7 @@
 #define ZIP_LOCAL UINT32_C(0x04034b50)
 #define MAX_EPUB_ENTRY (2U * 1024U * 1024U)
 #define MAX_BOOK_TEXT (512U * 1024U)
-#define CACHE_ROOT "/sdcard/.evv/.cache"
+#define CACHE_ROOT "/sdcard/.rr/.cache"
 #define CACHE_VERSION UINT32_C(3)
 
 typedef struct {
@@ -485,7 +485,7 @@ static void ensure_cache_schema(void)
 
 static void ensure_cache_directory(const char *path, char *out, size_t cap)
 {
-    (void)mkdir("/sdcard/.evv", 0775);
+    (void)mkdir("/sdcard/.rr", 0775);
     (void)mkdir(CACHE_ROOT, 0775);
     ensure_cache_schema();
     snprintf(out, cap, CACHE_ROOT "/%08lx", (unsigned long)cache_hash(path));

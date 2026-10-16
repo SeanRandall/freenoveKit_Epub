@@ -58,7 +58,11 @@ typedef struct OldInst {
     void    *owned1;              /* +0x6c0 */
     void    *owned2;              /* +0x6c4 */
     void    *concat;              /* +0x6c8 */
+    int32_t  pauses;              /* eciPauseMode */
+    int32_t  pauses_sent;
 } OldInst;
+
+extern int32_t g_DefaultPauses;
 
 #define OI_NEW(h)            ((h)->fresh)
 #define OI_CALLBACK(h)       ((h)->callback)
@@ -99,5 +103,7 @@ typedef struct OldInst {
 #define OI_OWNED1(h)         ((h)->owned1)
 #define OI_OWNED2(h)         ((h)->owned2)
 #define OI_CONCAT(h)         ((h)->concat)
+
+#define ECI_OLD_PAUSES      33
 
 #endif

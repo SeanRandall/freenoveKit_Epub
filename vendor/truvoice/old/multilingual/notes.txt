@@ -1,0 +1,5 @@
+Command line window
+
+Anthony C. Bartman (with assistance using only Claude Sonnet 5)
+
+This requires Visual C++ 6.0 to build.

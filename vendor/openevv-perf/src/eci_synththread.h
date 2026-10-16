@@ -126,6 +126,8 @@ struct SynthThread {
                                       the reset */
     uint8_t       pad_3dd[3];
     int32_t       told_cat;        /* 0x3e0, told the caller we went concat */
+    int32_t       pauses;          /* which automatically-made pauses shorten */
+    int32_t       tail;            /* how the current stretch of text ended */
 };
 
 #define ST_ENGINES(t)   (&(t)->engines)
@@ -178,6 +180,17 @@ struct SynthThread {
 #define ST_FILTER(t)    ((t)->filter)
 #define ST_FRESH(t)     ((t)->fresh)
 #define ST_TOLD_CAT(t)  ((t)->told_cat)
+#define ST_PAUSES(t)    ((t)->pauses)
+#define ST_TAIL(t)      ((t)->tail)
+
+#define ECI_PARAM_PAUSES    22
+
+/* Eloquence-compatible automatic pause policy.  Shared by the legacy ECI
+ * facade and the synthesis worker. */
+#define PAUSES_NONE          0
+#define PAUSES_AT_END        1
+#define PAUSES_ALWAYS        2
+#define PAUSES_DEFAULT       PAUSES_AT_END
 
 /* Bits of ST_FLAGS this side reads. */
 #define STF_WORD_MARKS  0x100  /* report where each word starts */

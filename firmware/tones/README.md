@@ -1,4 +1,4 @@
-# OpenEVV UI tone assets
+# RetroReader UI tone assets
 
 Place final WAV assets in this folder using the filenames below. Keep tones
 short, distinctive and comfortable through both headphones and the speaker.

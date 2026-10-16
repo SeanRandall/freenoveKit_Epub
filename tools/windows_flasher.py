@@ -1,4 +1,4 @@
-"""Small Windows firmware-image flasher for the Freenove EVV reader."""
+"""Small Windows firmware-image flasher for RetroReader."""
 
 from __future__ import annotations
 
@@ -27,8 +27,8 @@ def choose_image() -> str:
     root.attributes("-topmost", True)
     image = filedialog.askopenfilename(
         parent=root,
-        title="Choose EVV Reader firmware image",
-        filetypes=(("EVV firmware images", "*.bin"), ("All files", "*.*")),
+        title="Choose RetroReader firmware image",
+        filetypes=(("RetroReader firmware images", "*.bin"), ("All files", "*.*")),
     )
     root.destroy()
     return image
@@ -67,11 +67,11 @@ def main() -> int:
         return 0
     port, problem = detect_port()
     if not port:
-        message("EVV Reader Installer", problem, True)
+        message("RetroReader Installer", problem, True)
         return 1
     available, problem = port_is_available(port)
     if not available:
-        message("EVV Reader Installer", problem, True)
+        message("RetroReader Installer", problem, True)
         return 1
 
     filename = os.path.basename(image)
@@ -79,7 +79,7 @@ def main() -> int:
         None,
         f"Install {filename} on the reader at {port}?\n\n"
         "Books and configuration on the SD card will not be erased.",
-        "Install EVV Reader firmware",
+        "Install RetroReader firmware",
         0x21 | MB_TOPMOST_FOREGROUND,
     )
     if answer != 1:
@@ -117,3 +117,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

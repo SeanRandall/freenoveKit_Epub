@@ -8,18 +8,17 @@
 </head>
 <body>
   <a class="skip-link" href="#content">Skip to content</a>
-  <header class="site-header"><a class="brand" href="index.html">Retroreader</a><nav aria-label="Main navigation"><a href="index.html">Home</a><a href="get-a-kit.html">Get a kit</a><a href="why-not.html">Why not?</a><a href="compare.html">Compare</a><a href="voices.html">Voice samples</a><a href="install.html">Install</a><a aria-current="page" href="using-the-reader.html">Documentation</a><a href="about.html">About Sean</a><a href="https://github.com/SeanRandall/freenoveKit_Epub">GitHub</a></nav></header>
+  <header class="site-header"><a class="brand" href="index.html">Retroreader</a><nav aria-label="Main navigation"><a href="index.html">Home</a><a href="get-a-kit.html">Get a kit</a><a href="why-not.html">Why not?</a><a href="compare.html">Compare</a><a href="voices.html">Voice samples</a><a href="install.html">Install</a><a href="using-the-reader.html">Documentation</a><a href="changelog.html">Changelog</a><a href="about.html">About Sean</a><a href="https://github.com/SeanRandall/freenoveKit_Epub">GitHub</a></nav></header>
   <main id="content">
-    <nav aria-label="Documentation"><h2>Documentation</h2><ul><li><a href="preparing-the-sd-card.html">Preparing the SD card</a></li><li><a href="wireless-file-transfer.html">Wireless file transfer</a></li><li><a href="using-the-reader.html">Using the reader</a></li><li><a href="physical-description.html">Physical description</a></li></ul></nav>
-    <h1>Wireless file transfer</h1>
+<h1>Wireless file transfer</h1>
 <p>This page explains how to access Retroreader's microSD card over local Wi-Fi.</p>
 <h2>Before connecting</h2>
-<p>Configure ".evv/WIFI.INI" as described in <a href="preparing-the-sd-card.html">Preparing the SD card</a>. Open <strong>File transfer</strong> from Retroreader's menu (hold Up, then press Up again). Reading and other card access stop while transfer mode is active, preventing two services from changing the card simultaneously.</p>
-<p>Retroreader announces an address such as "EVVXXXX" and its IP address. Your identifier will differ. In the examples below, replace "evvXXXX" with the identifier announced by your unit. You can also see your unit's identifier during the installation process.</p>
+<p>Configure ".rr/WIFI.INI" as described in <a href="preparing-the-sd-card.md">Preparing the SD card</a>. Open <strong>File transfer</strong> from Retroreader's menu (hold Up, then press Up again). Reading and other card access stop while transfer mode is active, preventing two services from changing the card simultaneously.</p>
+<p>Retroreader announces an address such as "RRXXXX" and its IP address. Your identifier will differ. In the examples below, replace "rrXXXX" with the identifier announced by your unit. You can also see your unit's identifier during the installation process.</p>
 <p>File transfer currently has no password and should be used only on a trusted private network. Wi-Fi is 2.4 GHz, although the computer may use another band if both bands belong to the same local network.</p>
 <h2>Browser interface</h2>
 <p>Open the following address in a web browser:</p>
-<pre><code class="language-text">http://evvXXXX.local/
+<pre><code class="language-text">http://rrXXXX.local/
 </code></pre>
 <p>The browser interface can browse folders, upload and download files, create folders, rename or move items, and delete files or folders. </p>
 <p>If the ".local" name does not resolve, use the announced numeric address, for example "http://192.168.1.77/".</p>
@@ -28,17 +27,17 @@
 <li>Open <strong>File Explorer</strong> and select <strong>This PC</strong>.</li>
 <li>Choose <strong>See more</strong>, then <strong>Map network drive</strong>. Older versions of Windows show <strong>Map network drive</strong> directly on the ribbon.</li>
 <li>Choose an unused drive letter.</li>
-<li>Enter "http://evvXXXX.local/" in the Folder box.</li>
+<li>Enter "http://rrXXXX.local/" in the Folder box.</li>
 <li>Select <strong>Finish</strong>.</li>
 </ol>
 <p>You can also use Command Prompt:</p>
-<pre><code class="language-bat">net use * http://evvXXXX.local/
+<pre><code class="language-bat">net use * http://rrXXXX.local/
 </code></pre>
 <p>Windows uses its WebClient service for WebDAV. If Explorer says the network name cannot be found, start the <strong>WebClient</strong> service from the Services application and try again. Explorer can be slow when calculating progress or opening folders; the browser interface may be quicker for occasional transfers.</p>
 <h2>macOS Finder</h2>
 <ol>
 <li>In Finder, choose <strong>Go</strong>, then <strong>Connect to Server</strong>, or press <strong>Command-K</strong> (⌘K).</li>
-<li>Enter "http://evvXXXX.local/".</li>
+<li>Enter "http://rrXXXX.local/".</li>
 <li>Choose <strong>Connect</strong>. If asked, connect as a guest.</li>
 <li>Retroreader appears as a mounted network location in Finder.</li>
 </ol>
@@ -47,14 +46,14 @@
 <p>Most desktop file managers use GVfs or KIO and can open WebDAV directly.</p>
 <h3>GNOME Files, Nautilus, Nemo and similar file managers</h3>
 <p>Open <strong>Other Locations</strong>, find <strong>Connect to Server</strong>, and enter:</p>
-<pre><code class="language-text">dav://evvXXXX.local/
+<pre><code class="language-text">dav://rrXXXX.local/
 </code></pre>
 <p>The command-line equivalent on a GVfs desktop is:</p>
-<pre><code class="language-sh">gio mount dav://evvXXXX.local/
+<pre><code class="language-sh">gio mount dav://rrXXXX.local/
 </code></pre>
 <h3>KDE Plasma and Dolphin</h3>
 <p>Enter this in Dolphin's location bar:</p>
-<pre><code class="language-text">webdav://evvXXXX.local/
+<pre><code class="language-text">webdav://rrXXXX.local/
 </code></pre>
 <h3>Mounting with davfs2</h3>
 <p>Install "davfs2" using the distribution's package manager:</p>
@@ -69,7 +68,7 @@ sudo pacman -S davfs2
 </code></pre>
 <p>Create a mount point and mount the card:</p>
 <pre><code class="language-sh">sudo mkdir -p /mnt/retroreader
-sudo mount -t davfs http://evvXXXX.local/ /mnt/retroreader
+sudo mount -t davfs http://rrXXXX.local/ /mnt/retroreader
 </code></pre>
 <p>If prompted for credentials, leave them blank. Unmount before leaving transfer mode:</p>
 <pre><code class="language-sh">sudo umount /mnt/retroreader

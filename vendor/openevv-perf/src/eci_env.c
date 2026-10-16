@@ -344,6 +344,13 @@ int ev_sendChangedEnvironment(OldInst *h, Environment env, int32_t force)
     int32_t langMoved = 0;
     int i;
 
+    if (h->pauses != h->pauses_sent) {
+        if (setECIerror(api_set_param(OI_NEW(h), 0, ECI_PARAM_PAUSES,
+                                      h->pauses), h))
+            return 0;
+        h->pauses_sent = h->pauses;
+    }
+
     if (force
         || e[ENV_RATE] != sent[ENV_RATE]
         || e[13] != sent[13] || e[14] != sent[14]
@@ -459,6 +466,14 @@ int32_t STDCALL ev_setParam(OldInst *h, int32_t which, int32_t value)
     v = value;
     if (!inst)
         goto done;
+
+    if (which == ECI_OLD_PAUSES) {
+        if (value < PAUSES_NONE || value > PAUSES_ALWAYS)
+            return -1;
+        old = inst->pauses;
+        inst->pauses = value;
+        return old;
+    }
 
     if (which >= 0x11)
         return -1;

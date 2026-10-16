@@ -1,10 +1,10 @@
-# EVV Reader user-interface messages.
-# Copyright (C) EVV Reader contributors
-# This file is distributed under the same license as EVV Reader.
+# RetroReader user-interface messages.
+# Copyright (C) RetroReader contributors
+# This file is distributed under the same license as RetroReader.
 msgid ""
 msgstr ""
-"Project-Id-Version: EVV Reader 0.3-alpha\n"
-"POT-Creation-Date: 2026-10-06\n"
+"Project-Id-Version: RetroReader 2026.10.16\n"
+"POT-Creation-Date: 2026-10-16\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
@@ -533,4 +533,5 @@ msgstr ""
 #: firmware/main/button_speech_main.c:3262
 msgid "year"
 msgstr ""
+
 

@@ -25,7 +25,7 @@
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "esp_sntp.h"
-#include "evv_abi.h"
+#include "speech_engine.h"
 #include "transfer_mode.h"
 #include "remsound_receiver.h"
 
@@ -36,25 +36,9 @@
 #define TRANSFER_WIFI_PASSWORD ""
 #endif
 
-typedef struct OldInst OldInst;
-enum ECIMessage { eciWaveformBuffer, eciPhonemeBuffer, eciIndexReply };
-enum ECICallbackReturn { eciDataNotProcessed, eciDataProcessed, eciDataAbort };
-OldInst *STDCALL eo_new(void);
-int STDCALL et_addText(OldInst *, const char *);
-int STDCALL et_synthesize(OldInst *);
-int STDCALL ev_setOutputBuffer(OldInst *, int32_t, void *);
-int STDCALL vc_setVoiceParam(OldInst *, int32_t, int32_t, int32_t);
-void STDCALL eo_registerCallback(OldInst *, void *, void *);
-void STDCALL eo_synchronizeSynth(OldInst *);
-int STDCALL eo_speaking(OldInst *);
-void evvRunStaticInitialisers(void);
-void evv_port_start(void);
-
 #define FRAME_SAMPLES 2048
-#define BOOT_REQUEST_READER UINT32_C(0x45565652)
-#define BOOT_REQUEST_TRANSFER UINT32_C(0x45565654)
-#define VOICE_SPEED 6
-#define VOICE_VOLUME 7
+#define BOOT_REQUEST_READER UINT32_C(0x52524452)
+#define BOOT_REQUEST_TRANSFER UINT32_C(0x52524E54)
 #define ENGINE_VOLUME_MAX 80
 #define REMOTE_SILENCE_SAMPLES 128
 #define REMOTE_FIFO_SAMPLES 16384
@@ -63,10 +47,10 @@ void evv_port_start(void);
 #define REMOTE_PREFILL_SENTENCE_SAMPLES 4096
 #define REMOTE_PREFILL_LONG_SAMPLES 8192
 #define REMOTE_PREFILL_PASSAGE_SAMPLES 12288
-#define BOOT_STATE_NAMESPACE "evv_boot"
+#define BOOT_STATE_NAMESPACE "rr_boot"
 #define REMSOUND_HANDOFF_KEY "remsound"
-static int16_t *mono;
 static int16_t *stereo;
+static unsigned engine_sample_rate = 11025;
 static i2s_chan_handle_t audio;
 static QueueHandle_t presses;
 static volatile bool announcement_active;
@@ -143,13 +127,10 @@ typedef struct {
     adc_cali_handle_t calibration;
 } buttons_t;
 
-static enum ECICallbackReturn STDCALL waveform(OldInst *voice,
-    enum ECIMessage message, long parameter, void *context)
+static bool waveform(const int16_t *pcm, size_t count, void *context)
 {
-    (void)voice; (void)context;
-    if (message != eciWaveformBuffer) return eciDataProcessed;
-    size_t count = (size_t)parameter;
-    if (remote_cancel) return eciDataAbort;
+    (void)context;
+    if (remote_cancel) return false;
     if (capture_announcement) {
         size_t needed = announcement_pcm_samples + count;
         if (needed > announcement_pcm_capacity) {
@@ -159,15 +140,15 @@ static enum ECICallbackReturn STDCALL waveform(OldInst *voice,
             int16_t *larger = heap_caps_realloc(
                 announcement_pcm, capacity * sizeof(*larger),
                 MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-            if (!larger) return eciDataAbort;
+            if (!larger) return false;
             announcement_pcm = larger;
             announcement_pcm_capacity = capacity;
         }
         for (size_t i = 0; i < count; ++i)
             announcement_pcm[announcement_pcm_samples + i] =
-                (int16_t)(((int32_t)mono[i] * saved_volume) / 100);
+                (int16_t)(((int32_t)pcm[i] * saved_volume) / 100);
         announcement_pcm_samples += count;
-        return eciDataProcessed;
+        return true;
     }
     if (is_remote_mode && remote_i2s_mutex) {
         size_t offset = 0;
@@ -181,7 +162,7 @@ static enum ECICallbackReturn STDCALL waveform(OldInst *voice,
             if (copy > tail) copy = tail;
             for (size_t i = 0; i < copy; ++i)
                 remote_fifo[remote_fifo_write + i] =
-                    (int16_t)(((int32_t)mono[offset + i] * saved_volume)
+                    (int16_t)(((int32_t)pcm[offset + i] * saved_volume)
                               / 100);
             remote_fifo_write = (remote_fifo_write + copy)
                                 % REMOTE_FIFO_SAMPLES;
@@ -197,16 +178,23 @@ static enum ECICallbackReturn STDCALL waveform(OldInst *voice,
                 vTaskDelay(pdMS_TO_TICKS(1));
         }
         ++remote_stream_writes;
-        return remote_cancel ? eciDataAbort : eciDataProcessed;
+        return !remote_cancel;
     }
-    for (size_t i = 0; i < count; ++i) {
-        int32_t sample = ((int32_t)mono[i] * saved_volume) / 100;
-        stereo[i * 2] = stereo[i * 2 + 1] = (int16_t)sample;
+    for (size_t offset = 0; offset < count;) {
+        size_t take = count - offset;
+        if (take > FRAME_SAMPLES) take = FRAME_SAMPLES;
+        for (size_t i = 0; i < take; ++i) {
+            int32_t sample = ((int32_t)pcm[offset + i] * saved_volume) / 100;
+            stereo[i * 2] = stereo[i * 2 + 1] = (int16_t)sample;
+        }
+        size_t written = 0;
+        if (i2s_channel_write(audio, stereo, take * 4, &written,
+                              portMAX_DELAY) != ESP_OK
+            || written != take * 4)
+            return false;
+        offset += take;
     }
-    size_t written;
-    return i2s_channel_write(audio, stereo, count * 4, &written,
-                             portMAX_DELAY) == ESP_OK
-        ? eciDataProcessed : eciDataAbort;
+    return true;
 }
 
 static void remote_playback_task(void *arg)
@@ -274,7 +262,7 @@ static void remote_fifo_clear(void)
     xSemaphoreGive(remote_i2s_mutex);
 }
 
-static void speak(OldInst *voice, const char *text)
+static void speak(speech_engine_t *voice, const char *text)
 {
     remote_cancel = false;
     announcement_active = true;
@@ -297,11 +285,11 @@ static void speak(OldInst *voice, const char *text)
         remote_stream_active = true;
     }
     TickType_t speech_started = xTaskGetTickCount();
-    if (et_addText(voice, text) && et_synthesize(voice)) {
+    if (speech_engine_synthesize(voice, text)) {
         TickType_t limit = xTaskGetTickCount() + pdMS_TO_TICKS(12000);
-        while (eo_speaking(voice) && xTaskGetTickCount() < limit)
+        while (speech_engine_busy(voice) && xTaskGetTickCount() < limit)
             vTaskDelay(pdMS_TO_TICKS(1));
-        eo_synchronizeSynth(voice);
+        speech_engine_wait(voice);
     }
     if (is_remote_mode) {
         remote_stream_active = false;
@@ -317,9 +305,9 @@ static void speak(OldInst *voice, const char *text)
                (unsigned)strlen(text),
                (unsigned)((xTaskGetTickCount() - speech_started)
                           * portTICK_PERIOD_MS),
-               (unsigned)(remote_fifo_prefill * 1000 / 11025),
-               (unsigned)(queued * 1000 / 11025),
-               (unsigned)(maximum * 1000 / 11025),
+               (unsigned)(remote_fifo_prefill * 1000 / engine_sample_rate),
+               (unsigned)(queued * 1000 / engine_sample_rate),
+               (unsigned)(maximum * 1000 / engine_sample_rate),
                remote_stream_writes, remote_fifo_underflows,
                remote_cancel ? 1u : 0u);
         announcement_active = false;
@@ -333,21 +321,21 @@ static void speak(OldInst *voice, const char *text)
     announcement_active = false;
 }
 
-static bool render_announcement(OldInst *voice, const char *text)
+static bool render_announcement(speech_engine_t *voice, const char *text)
 {
     announcement_pcm_samples = 0;
     capture_announcement = true;
-    bool ok = et_addText(voice, text) && et_synthesize(voice);
+    bool ok = speech_engine_synthesize(voice, text);
     if (ok) {
         TickType_t limit = xTaskGetTickCount() + pdMS_TO_TICKS(15000);
-        while (eo_speaking(voice) && xTaskGetTickCount() < limit)
+        while (speech_engine_busy(voice) && xTaskGetTickCount() < limit)
             vTaskDelay(pdMS_TO_TICKS(1));
-        eo_synchronizeSynth(voice);
+        speech_engine_wait(voice);
     }
     capture_announcement = false;
     printf("TRANSFER announcement_cached samples=%u ms=%u ok=%u\n",
            (unsigned)announcement_pcm_samples,
-           (unsigned)(announcement_pcm_samples * 1000 / 11025),
+           (unsigned)(announcement_pcm_samples * 1000 / engine_sample_rate),
            ok && announcement_pcm_samples ? 1u : 0u);
     return ok && announcement_pcm_samples;
 }
@@ -395,32 +383,69 @@ static void remote_clear_queue(void)
         free(item.text);
 }
 
-static void load_voice_preferences(OldInst *voice)
+static void network_preference_key(char key[16], const char *suffix)
 {
+    const char *id = speech_engine_storage_id();
+    size_t id_length = strlen(id);
+    size_t suffix_length = strlen(suffix);
+    if (id_length + suffix_length + 1 <= 15) {
+        memcpy(key, id, id_length);
+        key[id_length] = '_';
+        memcpy(key + id_length + 1, suffix, suffix_length + 1);
+        return;
+    }
+    uint32_t hash = UINT32_C(2166136261);
+    for (const unsigned char *p = (const unsigned char *)id; *p; ++p) {
+        hash ^= *p;
+        hash *= UINT32_C(16777619);
+    }
+    snprintf(key, 16, "e%08lx_%s", (unsigned long)hash, suffix);
+}
+
+static void load_voice_preferences(speech_engine_t *voice)
+{
+    bool have_rate = false;
     nvs_handle_t prefs;
     if (nvs_open("reader", NVS_READONLY, &prefs) == ESP_OK) {
         int32_t value;
-        if (nvs_get_i32(prefs, "rate", &value) == ESP_OK
-            && value >= 60 && value <= 180)
+        char key[16];
+        network_preference_key(key, "rate");
+        if (nvs_get_i32(prefs, key, &value) == ESP_OK) {
             saved_rate = value;
+            have_rate = true;
+        }
         if (nvs_get_i32(prefs, "volume", &value) == ESP_OK
             && value >= 2 && value <= 100)
             saved_volume = value;
+        for (size_t i = 0; i < speech_engine_setting_count(voice); ++i) {
+            speech_setting_info_t info;
+            if (!speech_engine_setting_info(voice, i, &info)) continue;
+            char suffix[5];
+            snprintf(suffix, sizeof(suffix), "s%u", (unsigned)info.id);
+            network_preference_key(key, suffix);
+            if (nvs_get_i32(prefs, key, &value) == ESP_OK
+                && value >= info.minimum && value <= info.maximum)
+                (void)speech_engine_set(voice, info.id, value);
+        }
         nvs_close(prefs);
     }
-    ESP_ERROR_CHECK(vc_setVoiceParam(voice, 0, VOICE_SPEED, saved_rate)
-                    ? ESP_OK : ESP_FAIL);
-    ESP_ERROR_CHECK(vc_setVoiceParam(voice, 0, VOICE_VOLUME,
-                                     ENGINE_VOLUME_MAX) >= 0
-                    ? ESP_OK : ESP_FAIL);
-    printf("NETWORK_VOICE rate=%d volume=%d engine_volume=%d\n",
-           saved_rate, saved_volume, ENGINE_VOLUME_MAX);
+    if (have_rate)
+        (void)speech_engine_set(voice, SPEECH_SETTING_RATE, saved_rate);
+    else
+        (void)speech_engine_get(voice, SPEECH_SETTING_RATE, &saved_rate);
+    int engine_volume = 0;
+    (void)speech_engine_get(voice, SPEECH_SETTING_ENGINE_VOLUME,
+                            &engine_volume);
+    printf("NETWORK_VOICE engine=%s rate=%d volume=%d engine_volume=%d\n",
+           speech_engine_name(voice), saved_rate, saved_volume,
+           engine_volume);
 }
 
 static bool read_remote_config(char *host, size_t host_size, int *port,
                                char *key, size_t key_size)
 {
-    FILE *file = fopen("/sdcard/.evv/nvdaremote.ini", "rb");
+    FILE *file = fopen("/sdcard/.rr/nvdaremote.ini", "rb");
+    if (!file) file = fopen("/sdcard/.rr/NVDAREMOTE.INI", "rb");
     if (!file) return false;
     char line[384];
     while (fgets(line, sizeof(line), file)) {
@@ -858,22 +883,29 @@ void app_main(void)
     /* Keep the speech buffers and medium-sized engine allocations out of the
        limited internal SRAM; Wi-Fi needs that SRAM for its control objects. */
     heap_caps_malloc_extmem_enable(1024);
-    mono = heap_caps_malloc(FRAME_SAMPLES * sizeof(*mono),
-                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     stereo = heap_caps_malloc(FRAME_SAMPLES * 2 * sizeof(*stereo),
                               MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    ESP_ERROR_CHECK(mono && stereo ? ESP_OK : ESP_ERR_NO_MEM);
+    ESP_ERROR_CHECK(stereo ? ESP_OK : ESP_ERR_NO_MEM);
+
+    speech_engine_config_t engine_config = {
+        .pcm = waveform,
+        .context = NULL,
+    };
+    speech_engine_t *voice = speech_engine_create(&engine_config);
+    ESP_ERROR_CHECK(voice ? ESP_OK : ESP_ERR_NO_MEM);
+    engine_sample_rate = speech_engine_sample_rate(voice);
+    ESP_ERROR_CHECK(engine_sample_rate ? ESP_OK : ESP_ERR_INVALID_STATE);
 
     i2s_chan_config_t chan = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO,
                                                         I2S_ROLE_MASTER);
     /* Keep only a short hardware runway.  Remote speech is written directly
-       from OpenEVV's callback, so a large silence-filled DMA queue would add
+       from the engine callback, so a large silence-filled DMA queue would add
        avoidable latency before its first sample. */
     chan.dma_desc_num = 4;
     chan.dma_frame_num = 128;
     ESP_ERROR_CHECK(i2s_new_channel(&chan, &audio, NULL));
     i2s_std_config_t std = {
-        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(11025),
+        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(engine_sample_rate),
         .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(
             I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
         .gpio_cfg = { .mclk = I2S_GPIO_UNUSED, .bclk = GPIO_NUM_42,
@@ -881,17 +913,8 @@ void app_main(void)
                       .din = I2S_GPIO_UNUSED },
     };
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(audio, &std));
-    evv_port_start();
-    evvRunStaticInitialisers();
-    OldInst *voice = eo_new();
-    ESP_ERROR_CHECK(voice ? ESP_OK : ESP_ERR_NO_MEM);
-    eo_registerCallback(voice, waveform, NULL);
-    ESP_ERROR_CHECK(ev_setOutputBuffer(voice, FRAME_SAMPLES, mono)
-                    ? ESP_OK : ESP_FAIL);
-
-    /* OpenEVV creates several task stacks in PSRAM but its RTOS control
-       objects still require scarce internal RAM.  Initialise NVS only after
-       the voice so its page cache cannot starve voice construction. */
+    /* Some engines create task stacks or working buffers in PSRAM. Initialise
+       NVS only after the voice so its page cache cannot starve construction. */
     load_voice_preferences(voice);
 
     buttons_t buttons = { 0 };
@@ -906,7 +929,7 @@ void app_main(void)
         : transfer_mode_start(TRANSFER_WIFI_SSID,
                               TRANSFER_WIFI_PASSWORD, &status);
     /* The RTC mode hint may be lost during the reader's staged OTA handoff.
-       If the SD-card marker resolved to RemSound only after OpenEVV was
+       If the SD-card marker resolved to RemSound only after the engine was
        initialized, restart once with a fresh one-shot request so the early
        path above can enter without carrying the synthesizer in runtime RAM. */
     if (status.remsound_mode) {

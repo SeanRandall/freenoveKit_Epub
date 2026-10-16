@@ -57,7 +57,7 @@ esp_err_t epub_load_document_instant(const char *path, size_t focus_section,
 esp_err_t epub_build_index(const char *path);
 esp_err_t epub_build_index_cancelable(const char *path,
                                       const volatile bool *cancel_requested);
-/* Removes only EVV's generated hidden book cache.  User-provided sidecar
+/* Removes only RetroReader's generated hidden book cache. User-provided sidecar
    indexes beside books are deliberately left intact. */
 esp_err_t epub_clear_cache(void);
 bool epub_read_text(const epub_document_t *document, size_t offset,

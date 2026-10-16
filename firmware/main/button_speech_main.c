@@ -42,10 +42,10 @@
 #include "esp_audio_simple_dec_default.h"
 #include "speech_engine.h"
 
-#ifndef EVV_ENGINE_SAMPLE_RATE
-#define EVV_ENGINE_SAMPLE_RATE 11025
+#ifndef RR_ENGINE_SAMPLE_RATE
+#define RR_ENGINE_SAMPLE_RATE 11025
 #endif
-#define SAMPLE_RATE EVV_ENGINE_SAMPLE_RATE
+#define SAMPLE_RATE RR_ENGINE_SAMPLE_RATE
 #define FRAME_SAMPLES 2048
 #define PAUSE_REWIND_MS 500
 #define ROLLING_START_MS 4000
@@ -804,9 +804,10 @@ static char *reader_psram_strdup(const char *text)
 
 static void reader_load_substitutions(void)
 {
-    FILE *file = fopen("/sdcard/.evv/substitutions.tsv", "rb");
+    const char *path = "/sdcard/.rr/substitutions.tsv";
+    FILE *file = fopen(path, "rb");
     if (!file) {
-        puts("SUBSTITUTIONS none path=/sdcard/.evv/substitutions.tsv");
+        puts("SUBSTITUTIONS none path=/sdcard/.rr/substitutions.tsv");
         return;
     }
     reader_substitutions = heap_caps_calloc(160,
@@ -838,8 +839,8 @@ static void reader_load_substitutions(void)
         ++reader_substitution_count;
     }
     fclose(file);
-    printf("SUBSTITUTIONS loaded=%u path=/sdcard/.evv/substitutions.tsv\n",
-           (unsigned)reader_substitution_count);
+    printf("SUBSTITUTIONS loaded=%u path=%s\n",
+           (unsigned)reader_substitution_count, path);
 }
 
 static const char *reader_apply_substitutions(const char *input)
@@ -1003,8 +1004,13 @@ static bool reader_start_next_text_chunk(speech_engine_t *instance)
             break;
         }
     }
-    /* Prefer one complete sentence. Long sentences still split at a safe word
-       boundary so OpenEVV regularly yields its core. */
+    /* Prefer an explicit prosodic boundary.  Ending an engine request on an
+       ordinary space resets the synthesizer's pitch contour in the middle of
+       a sentence, which is audible even when its automatic end pause is
+       shortened.  The nominal target controls throughput, but we may look
+       ahead as far as this 767-byte buffer for sentence punctuation or, when
+       a sentence is very long, a comma/semicolon/colon.  A space is only the
+       final fallback when the entire buffer contains no usable punctuation. */
     /* At faster voices a fixed amount of text yields fewer seconds of PCM,
        while OpenEVV still pays its per-request setup cost.  Give it more text
        per request so synthesis can stay ahead without increasing the cold
@@ -1038,29 +1044,62 @@ static bool reader_start_next_text_chunk(speech_engine_t *instance)
            target.  Keep the scan limit fixed and remember the last boundary. */
         const size_t scan_limit = take;
         size_t last_sentence_boundary = 0;
+        size_t last_clause_boundary = 0;
         for (size_t at = 0; at < scan_limit; ++at) {
             unsigned char c = (unsigned char)reader_text_chunk[at];
-            if (c != '.' && c != '?' && c != '!') continue;
+            bool sentence_mark = c == '.' || c == '?' || c == '!';
+            bool clause_mark = c == ',' || c == ';' || c == ':';
+            if (!sentence_mark && !clause_mark) continue;
             size_t after = at + 1;
             while (after < until_section && after < scan_limit
                    && strchr("\"')\x92\x94", reader_text_chunk[after]))
                 ++after;
-            if (after == until_section
-                || reader_text_chunk[after] == ' ') {
-                last_sentence_boundary = after;
+            if (after == until_section || after == lookahead
+                || isspace((unsigned char)reader_text_chunk[after])) {
+                if (sentence_mark) last_sentence_boundary = after;
+                else last_clause_boundary = after;
             }
         }
-        if (last_sentence_boundary != 0
-            && (!cold_chunk
-                || last_sentence_boundary >= chunk_target * 3 / 4)) {
+        if (last_sentence_boundary != 0) {
             take = last_sentence_boundary;
             sentence_ended = true;
         } else {
-            size_t boundary = take;
-            while (boundary > 90
-                   && reader_text_chunk[boundary] != ' ')
-                --boundary;
-            if (boundary > 90) take = boundary;
+            /* Look forwards before accepting an earlier clause boundary: a
+               nearby full stop keeps a complete sentence and its contour in
+               one engine request. */
+            size_t forward_boundary = 0;
+            bool forward_sentence = false;
+            for (size_t at = scan_limit; at < lookahead; ++at) {
+                unsigned char c = (unsigned char)reader_text_chunk[at];
+                bool sentence_mark = c == '.' || c == '?' || c == '!';
+                bool clause_mark = c == ',' || c == ';' || c == ':';
+                if (!sentence_mark && !clause_mark) continue;
+                size_t after = at + 1;
+                while (after < lookahead
+                       && strchr("\"')\x92\x94", reader_text_chunk[after]))
+                    ++after;
+                if (after == lookahead
+                    || isspace((unsigned char)reader_text_chunk[after])) {
+                    forward_boundary = after;
+                    forward_sentence = sentence_mark;
+                    break;
+                }
+            }
+            if (forward_boundary) {
+                take = forward_boundary;
+                sentence_ended = forward_sentence;
+            } else if (last_clause_boundary) {
+                take = last_clause_boundary;
+            } else {
+                size_t boundary = lookahead;
+                while (boundary > 90
+                       && !isspace((unsigned char)reader_text_chunk[boundary]))
+                    --boundary;
+                if (boundary > 90) take = boundary;
+                else take = lookahead;
+                printf("SYNTH_CHUNK emergency_space_boundary=%u\n",
+                       (unsigned)take);
+            }
         }
     }
     reader_text_offset += take;
@@ -1070,6 +1109,16 @@ static bool reader_start_next_text_chunk(speech_engine_t *instance)
         ++skipped;
     }
     reader_text_chunk[take] = '\0';
+
+    /* Enough text to identify an exact boundary without flooding a serial
+       logger with whole copyrighted documents. */
+    {
+        const size_t preview = 48;
+        size_t tail = take > preview ? take - preview : 0;
+        printf("SYNTH_TEXT start=\"%.*s\" end=\"%s\" continuation=%d\n",
+               (int)(take < preview ? take : preview), reader_text_chunk,
+               reader_text_chunk + tail, reader_sentence_continuation);
+    }
 
     reader_rendering = true;
     size_t lead_before = reader_pcm_samples >= reader_play_offset
@@ -1774,19 +1823,42 @@ static void queue_audio(enum AudioEventKind kind, const char *text)
 }
 
 #ifdef PARAGRAPH_READER_MODE
+/* NVS keys may contain at most 15 characters.  Some speech-engine storage
+ * identifiers are deliberately descriptive and longer than that; blindly
+ * snprintf'ing them used to collapse every setting onto the same truncated
+ * key.  Retain the readable legacy keys when they fit, otherwise use a stable
+ * hash of the engine identifier and leave room for the setting suffix. */
+static void reader_speech_preference_key(char key[16], const char *suffix)
+{
+    const char *id = speech_engine_storage_id();
+    size_t id_length = strlen(id);
+    size_t suffix_length = strlen(suffix);
+    if (id_length + 1 + suffix_length <= 15) {
+        memcpy(key, id, id_length);
+        key[id_length] = '_';
+        memcpy(key + id_length + 1, suffix, suffix_length + 1);
+        return;
+    }
+    uint32_t hash = UINT32_C(2166136261);
+    for (const unsigned char *p = (const unsigned char *)id; *p; ++p) {
+        hash ^= *p;
+        hash *= UINT32_C(16777619);
+    }
+    snprintf(key, 16, "e%08lx_%s", (unsigned long)hash, suffix);
+}
+
 static void reader_save_preferences(void)
 {
     if (!reader_prefs)
         return;
-    char rate_key[12];
-    snprintf(rate_key, sizeof(rate_key), "%s_rate",
-             speech_engine_storage_id());
+    char rate_key[16];
+    reader_speech_preference_key(rate_key, "rate");
     (void)nvs_set_i32(reader_prefs, rate_key, reader_rate);
     (void)nvs_set_i32(reader_prefs, "volume", reader_volume);
     for (size_t i = 0; i < SPEECH_SETTING_COUNT; ++i) {
-        char key[12];
-        snprintf(key, sizeof(key), "%s_s%u", speech_engine_storage_id(),
-                 (unsigned)i);
+        char key[16], suffix[5];
+        snprintf(suffix, sizeof(suffix), "s%u", (unsigned)i);
+        reader_speech_preference_key(key, suffix);
         if (reader_speech_saved & (1U << i))
             (void)nvs_set_i32(reader_prefs, key, reader_speech_values[i]);
     }
@@ -1880,9 +1952,8 @@ static void reader_load_preferences(void)
     ESP_ERROR_CHECK(nvs_open("reader", NVS_READWRITE, &reader_prefs));
     int32_t value;
     bool have_stored_speech_rate = false;
-    char rate_key[12];
-    snprintf(rate_key, sizeof(rate_key), "%s_rate",
-             speech_engine_storage_id());
+    char rate_key[16];
+    reader_speech_preference_key(rate_key, "rate");
     esp_err_t rate_error = nvs_get_i32(reader_prefs, rate_key, &value);
     /* Preserve existing OpenEVV users' settings while starting every newly
        introduced engine with its own clean profile. */
@@ -1897,9 +1968,9 @@ static void reader_load_preferences(void)
         && value >= 2 && value <= 100)
         reader_volume = value;
     for (size_t i = 0; i < SPEECH_SETTING_COUNT; ++i) {
-        char key[12];
-        snprintf(key, sizeof(key), "%s_s%u", speech_engine_storage_id(),
-                 (unsigned)i);
+        char key[16], suffix[5];
+        snprintf(suffix, sizeof(suffix), "s%u", (unsigned)i);
+        reader_speech_preference_key(key, suffix);
         esp_err_t speech_error = nvs_get_i32(reader_prefs, key, &value);
         if (speech_error != ESP_OK
             && strcmp(speech_engine_storage_id(), "oevv") == 0) {
@@ -2977,14 +3048,26 @@ static void reader_format_menu_item(void)
         strlcpy(reader_announcement, "clear book cache",
                 sizeof(reader_announcement));
     else if (item == READER_MENU_SLEEP_TIMER) {
-        if (reader_sleep_timer_choice)
+        if (reader_sleep_timer_active) {
+            TickType_t now = xTaskGetTickCount();
+            int32_t ticks_left =
+                (int32_t)(reader_sleep_timer_deadline - now);
+            unsigned remaining_minutes = ticks_left > 0
+                ? (unsigned)(((TickType_t)ticks_left
+                              + pdMS_TO_TICKS(60000) - 1)
+                             / pdMS_TO_TICKS(60000))
+                : 0;
             snprintf(reader_announcement, sizeof(reader_announcement),
-                     "sleep timer. %u minutes%s",
-                     sleep_minutes[reader_sleep_timer_choice],
-                     reader_sleep_timer_active ? ". running" : "");
-        else
+                     "sleep timer. %u minutes remaining. centre to cancel",
+                     remaining_minutes);
+        } else if (reader_sleep_timer_choice) {
+            snprintf(reader_announcement, sizeof(reader_announcement),
+                     "sleep timer. %u minutes",
+                     sleep_minutes[reader_sleep_timer_choice]);
+        } else {
             strlcpy(reader_announcement, "sleep timer. off",
                     sizeof(reader_announcement));
+        }
     }
     else if (item == READER_MENU_SLEEP_KEY)
         snprintf(reader_announcement, sizeof(reader_announcement),
@@ -3022,13 +3105,16 @@ static void reader_build_menu(void)
     reader_menu_count = 0;
     for (size_t i = 0; i < sizeof(base) / sizeof(base[0]); ++i)
         reader_menu_items[reader_menu_count++] = base[i];
+    /* Destructive maintenance belongs after ordinary preferences, while the
+       optional operating modes remain nearest the end of the menu so an Up
+       press from Close menu reaches them immediately. */
+    reader_menu_items[reader_menu_count++] = READER_MENU_CLEAR_CACHE;
     if (reader_have_wifi_config)
         reader_menu_items[reader_menu_count++] = READER_MENU_FILE_TRANSFER;
     if (reader_have_wifi_config && reader_have_remote_config)
         reader_menu_items[reader_menu_count++] = READER_MENU_NVDA_REMOTE;
     if (reader_have_wifi_config && reader_have_remsound_config)
         reader_menu_items[reader_menu_count++] = READER_MENU_REMSOUND;
-    reader_menu_items[reader_menu_count++] = READER_MENU_CLEAR_CACHE;
     reader_menu_items[reader_menu_count++] = READER_MENU_CLOSE;
     printf("MENU_BUILD items=%u transfer=%d remote=%d remsound=%d\n",
            (unsigned)reader_menu_count, reader_have_wifi_config,
@@ -3102,7 +3188,11 @@ static void reader_format_speech_setting(void)
         return;
     }
     int value = reader_speech_values[info.id];
-    if (info.boolean_value)
+    if (info.value_labels && value >= info.minimum && value <= info.maximum)
+        snprintf(reader_announcement, sizeof(reader_announcement), "%s. %s",
+                 info.name,
+                 info.value_labels[value - info.minimum]);
+    else if (info.boolean_value)
         snprintf(reader_announcement, sizeof(reader_announcement), "%s. %s",
                  info.name, value
                     ? (info.true_label ? info.true_label : "on")
@@ -3330,6 +3420,10 @@ static void reader_arm_sleep_timer(void)
 
 static void reader_change_sleep_timer(int direction)
 {
+    if (reader_sleep_timer_active) {
+        reader_speak_menu_item();
+        return;
+    }
     int choice = (int)reader_sleep_timer_choice + direction;
     if (choice < 0) choice = 7;
     if (choice > 7) choice = 0;
@@ -3342,13 +3436,21 @@ static void reader_change_sleep_timer(int direction)
 
 static void reader_start_sleep_timer(void)
 {
+    if (reader_sleep_timer_active) {
+        reader_sleep_timer_active = false;
+        strlcpy(reader_announcement, "sleep timer cancelled",
+                sizeof(reader_announcement));
+        queue_audio(AUDIO_SPEECH, reader_announcement);
+        puts("SLEEP_TIMER cancelled from menu");
+        return;
+    }
     reader_arm_sleep_timer();
     if (!reader_sleep_timer_choice) {
         strlcpy(reader_announcement, "sleep timer off",
                 sizeof(reader_announcement));
     } else {
         snprintf(reader_announcement, sizeof(reader_announcement),
-                 "sleep timer started. %u minutes",
+                 "sleep timer. %u minutes remaining. centre to cancel",
                  reader_sleep_minutes[reader_sleep_timer_choice]);
     }
     queue_audio(AUDIO_SPEECH, reader_announcement);
@@ -4024,9 +4126,9 @@ static bool reader_begin_recording(void)
 {
     if (!reader_selected_path[0] || reader_recording)
         return false;
-    if (mkdir("/sdcard/.evv", 0777) != 0 && errno != EEXIST)
+    if (mkdir("/sdcard/.rr", 0777) != 0 && errno != EEXIST)
         return false;
-    if (mkdir("/sdcard/.evv/recordings", 0777) != 0 && errno != EEXIST)
+    if (mkdir("/sdcard/.rr/recordings", 0777) != 0 && errno != EEXIST)
         return false;
     const char *base = strrchr(reader_selected_path, '/');
     base = base ? base + 1 : reader_selected_path;
@@ -4043,7 +4145,7 @@ static bool reader_begin_recording(void)
         book[--length] = 0;
     if (!book[0]) strlcpy(book, "book", sizeof(book));
     char folder[384];
-    snprintf(folder, sizeof(folder), "/sdcard/.evv/recordings/%s", book);
+    snprintf(folder, sizeof(folder), "/sdcard/.rr/recordings/%s", book);
     if (mkdir(folder, 0777) != 0 && errno != EEXIST)
         return false;
 
@@ -4951,7 +5053,7 @@ void app_main(void)
     };
     instance = speech_engine_create(&engine_config);
     if (instance == NULL) {
-        ESP_LOGE(TAG, "OpenEVV initialization failed");
+        ESP_LOGE(TAG, "speech engine initialization failed");
         return;
     }
     /* Deliberately relaxed for the first public hardware demonstration. */
@@ -5056,7 +5158,7 @@ static bool reader_apply_speech_profile(speech_engine_t *instance)
     return true;
 }
 
-#define BOOT_REQUEST_TRANSFER UINT32_C(0x45565654)
+#define BOOT_REQUEST_TRANSFER UINT32_C(0x52524E54)
 
 typedef enum {
     NETWORK_CONFIG_OK,
@@ -5106,8 +5208,7 @@ static network_config_result_t reader_check_key_file(
 static network_config_result_t reader_check_wifi_config(void)
 {
     static const char *const paths[] = {
-        "/sdcard/.evv/WIFI.INI", "/sdcard/.evv/wifi.ini",
-        "/sdcard/EVVZERO/WIFI.INI", "/sdcard/EVVZERO/wifi.ini",
+        "/sdcard/.rr/WIFI.INI", "/sdcard/.rr/wifi.ini",
     };
     return reader_check_key_file(paths, sizeof(paths) / sizeof(paths[0]),
                                  "ssid=", "password=");
@@ -5116,8 +5217,7 @@ static network_config_result_t reader_check_wifi_config(void)
 static void reader_configure_timezone(void)
 {
     static const char *const paths[] = {
-        "/sdcard/.evv/WIFI.INI", "/sdcard/.evv/wifi.ini",
-        "/sdcard/EVVZERO/WIFI.INI", "/sdcard/EVVZERO/wifi.ini",
+        "/sdcard/.rr/WIFI.INI", "/sdcard/.rr/wifi.ini",
     };
     char configured[96] = {0};
     for (size_t i = 0; i < sizeof(paths) / sizeof(paths[0])
@@ -5161,8 +5261,8 @@ static void reader_configure_timezone(void)
 static network_config_result_t reader_check_remote_config(void)
 {
     static const char *const paths[] = {
-        "/sdcard/.evv/nvdaremote.ini",
-        "/sdcard/.evv/NVDAREMOTE.INI",
+        "/sdcard/.rr/nvdaremote.ini",
+        "/sdcard/.rr/NVDAREMOTE.INI",
     };
     network_config_result_t result = reader_check_key_file(
         paths, sizeof(paths) / sizeof(paths[0]), "host=", "key=");
@@ -5175,8 +5275,8 @@ static network_config_result_t reader_check_remote_config(void)
 static network_config_result_t reader_check_remsound_config(void)
 {
     static const char *const paths[] = {
-        "/sdcard/.evv/remsound.ini",
-        "/sdcard/.evv/REMSOUND.INI",
+        "/sdcard/.rr/remsound.ini",
+        "/sdcard/.rr/REMSOUND.INI",
     };
     return reader_check_key_file(paths, sizeof(paths) / sizeof(paths[0]),
                                  "host=", "password=");
@@ -5474,7 +5574,7 @@ static void reader_engine_task(void *arg)
 
     instance = reader_create_engine();
     if (instance == NULL) {
-        ESP_LOGE(TAG, "OpenEVV initialization failed");
+        ESP_LOGE(TAG, "speech engine initialization failed");
         return;
     }
     esp_audio_dec_register_default();
@@ -5575,7 +5675,8 @@ static void reader_engine_task(void *arg)
                     sizeof(reader_announcement));
             (void)speak(instance, reader_announcement, event.generation);
             reader_stop_audio();
-            FILE *mode = fopen("/sdcard/.evv/network.mode", "wb");
+            (void)mkdir("/sdcard/.rr", 0775);
+            FILE *mode = fopen("/sdcard/.rr/network.mode", "wb");
             if (mode) {
                 fputs(clock_mode ? "clock\n"
                       : remote ? "nvda\n"
@@ -6047,3 +6148,4 @@ void app_main(void)
     }
 }
 #endif
+

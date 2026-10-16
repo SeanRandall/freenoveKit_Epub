@@ -4,9 +4,9 @@ import re
 from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile
 
 root = Path(__file__).resolve().parents[1]
-output = root / "sd-card" / "EVV Reader Guide.epub"
+output = root / "sd-card" / "RetroReader Guide.epub"
 physical_description = root / "Hardware physical description.md"
-reader_guide = root / "EVV Reader Guide.md"
+reader_guide = root / "RetroReader Guide.md"
 web_directory = root / "docs"
 
 
@@ -107,9 +107,9 @@ package = """<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="book-id">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
     <dc:identifier id="book-id">urn:evv:alpha-guide</dc:identifier>
-    <dc:title>EVV Reader Guide</dc:title>
+    <dc:title>RetroReader Guide</dc:title>
     <dc:language>en-GB</dc:language>
-    <dc:creator>EVVZero contributors</dc:creator>
+    <dc:creator>RetroReader contributors</dc:creator>
     <meta property="dcterms:modified">2026-10-01T00:00:00Z</meta>
   </metadata>
   <manifest>
@@ -121,7 +121,7 @@ package = """<?xml version="1.0" encoding="UTF-8"?>
 """
 guide = f"""<?xml version="1.0" encoding="UTF-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml" lang="en-GB">
-<head><title>EVV Reader Guide</title></head>
+<head><title>RetroReader Guide</title></head>
 <body>
 {markdown_body(reader_guide.read_text(encoding="utf-8-sig"))}
 </body></html>
@@ -146,7 +146,7 @@ with ZipFile(output, "w") as book:
 web_directory.mkdir(parents=True, exist_ok=True)
 web_directory.joinpath("reader-guide.html").write_text(
     web_document(
-        "EVV Reader Guide",
+        "RetroReader Guide",
         markdown_body(reader_guide.read_text(encoding="utf-8-sig")),
     ),
     encoding="utf-8",
@@ -162,3 +162,4 @@ web_directory.joinpath("physical-description.html").write_text(
 )
 
 print(output)
+

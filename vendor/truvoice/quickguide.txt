@@ -1,0 +1,51 @@
+Usage: cgrm_spk [options] "text"
+
+Speak to audio file or to speaker using Centigram's TruVoice TTS synthesizer.
+
+    -h, --help                show this help message and exit
+    -f, --filename=<str>      output to audio file
+    -a, --format=<int>        audio file format (0: wav, 1: raw, 2: au)
+    -c, --codec=<int>         audio codec (0: pcm, 1: a-law)
+    -s, --samplerate=<int>    audio sampling rate (0: 11khz, 1: 8khz)
+    -m, --test                turn on test mode. overrides text input
+
+embedded commands:
+--------------------------------------------------------------------------------------------
+
+{{voice [option]}}
+	+ peter
+	+ sidney
+	+ eddie
+	+ douglas
+	+ biff
+	+ amos
+	+ melvin
+	+ alex
+	+ wanda
+	+ julia
+
+{{volume [option]}}
+	0 -> 16
+
+{{fast [option]}}				// fast read mode with different levels
+	0 -> ?
+
+{{rate [option]}}
+	50 -> 250
+
+{{pitch [option]}}
+	50 -> 400
+
+{{pause [option]}}				// pause with duration in hundredths of a second (2.5 seconds is max)
+	0 -> 250
+
+{{email [on|off]}}				// e-mail context mode
+
+{{speakmode [word|normal]}}		// word-read or normal prosody
+
+{{style [option]}}
+	+ normal
+	+ whisper
+	+ monotone
+
+{{phoneme [on|off]}}

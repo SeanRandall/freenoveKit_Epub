@@ -1,0 +1,14 @@
+{
+  "version": "2026.10.16",
+  "variants": [
+    {"id":"openevv-en-US","engine":"OpenEVV","label":"US English","image":"RetroReader-openevv-en-US.bin","cmake":["RR_SPEECH_ENGINE=openevv","EVV_LANGUAGE=enus"],"default":true},
+    {"id":"openevv-en-GB","engine":"OpenEVV","label":"British English","image":"RetroReader-openevv-en-GB.bin","cmake":["RR_SPEECH_ENGINE=openevv","EVV_LANGUAGE=engb"]},
+    {"id":"pico-en-US","engine":"Pico","label":"US English","image":"RetroReader-pico-en-US.bin","cmake":["RR_SPEECH_ENGINE=pico","RR_PICO_VOICE=en-US"]},
+    {"id":"pico-en-GB","engine":"Pico","label":"British English","image":"RetroReader-pico-en-GB.bin","cmake":["RR_SPEECH_ENGINE=pico","RR_PICO_VOICE=en-GB"]},
+    {"id":"dectalk-dtc01-en-US","engine":"DECtalk","label":"DTC-01 US English","image":"RetroReader-dectalk-dtc01-en-US.bin","cmake":["RR_SPEECH_ENGINE=dectalk"]},
+    {"id":"dectalk-4.3-en-US","engine":"DECtalk","label":"DECtalk 4.3 US English","image":"RetroReader-dectalk-4.3-en-US.bin","cmake":["RR_SPEECH_ENGINE=dectalk43"]},
+    {"id":"openbst-1998ENG","engine":"OpenBST","label":"1998 English","image":"RetroReader-openbst-1998ENG.bin","cmake":["RR_SPEECH_ENGINE=openbst","RR_OPENBST_BUILD=1998ENG"]},
+    {"id":"monologue-xen11k8","engine":"Monologue","label":"XEN11K8 English","image":"RetroReader-monologue-xen11k8.bin","cmake":["RR_SPEECH_ENGINE=monologue"]},
+    {"id":"truvoice-en-US","engine":"TruVoice","label":"US English","image":"RetroReader-truvoice-en-US.bin","cmake":["RR_SPEECH_ENGINE=truvoice"]}
+  ]
+}

@@ -358,6 +358,145 @@ THIS int32_t stw_registerCallback(SynthThread *t, void *inst, void *cb,
     return rc;
 }
 
+/* ---- shortening automatically-created pauses ------------------------ */
+
+#define TAIL_NONE 0
+#define TAIL_SHUT 1
+#define TAIL_OPEN 2
+
+static const char SHORT_PAUSE[] = " `p1 ";
+
+static int pauseMark(unsigned char c)
+{
+    return c == '-' || c == ',' || c == '.' || c == ':' || c == ';'
+        || c == '?' || c == '!' || c == 0x96 || c == 0x97;
+}
+
+static int pauseCloser(unsigned char c)
+{
+    return c == ')' || c == ']' || c == '}' || c == '"' || c == '\''
+        || c == 0x92 || c == 0x94 || c == 0xbb;
+}
+
+static int pauseSpace(unsigned char c)
+{
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r';
+}
+
+static int startsAnnotation(const char *s, int32_t i, int32_t from)
+{
+    return s[i] == '`' && (i == from || s[i - 1] != '\\');
+}
+
+static int isPause(const char *s, int32_t n)
+{
+    int32_t i;
+    if (n == 2 && s[1] >= '0' && s[1] <= '4') return 1;
+    if (n < 3 || s[1] != 'p') return 0;
+    for (i = 2; i < n; i++)
+        if (s[i] < '0' || s[i] > '9') return 0;
+    return 1;
+}
+
+static int endsInMark(const char *s, int32_t start, int32_t end)
+{
+    while (end > start && pauseCloser((unsigned char)s[end - 1])) end--;
+    if (end == start) return -1;
+    return pauseMark((unsigned char)s[end - 1]);
+}
+
+static int tailOfText(const char *s, int32_t n, int before)
+{
+    int32_t i = n;
+    for (;;) {
+        int32_t end, start, q;
+        while (i > 0 && pauseSpace((unsigned char)s[i - 1])) i--;
+        if (i == 0) return before;
+        end = i;
+        while (i > 0 && !pauseSpace((unsigned char)s[i - 1])) i--;
+        start = i;
+        for (q = start; q < end && !startsAnnotation(s, q, start); q++);
+        if (q < end) {
+            if (endsInMark(s, start, end) == 1) return TAIL_SHUT;
+            if (isPause(s + q, end - q)) return TAIL_SHUT;
+            if (memchr(s + q, '[', (size_t)(end - q))) return TAIL_OPEN;
+            end = q;
+        }
+        switch (endsInMark(s, start, end)) {
+        case -1: continue;
+        case 1: return TAIL_SHUT;
+        default: return TAIL_OPEN;
+        }
+    }
+}
+
+static int canPrecedeMark(unsigned char c)
+{
+    if (c >= 0x80) return !pauseMark(c) && !pauseCloser(c);
+    return pauseSpace(c) || (c >= '0' && c <= '9')
+        || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+}
+
+static char *shortenPunctuation(const char *s, int32_t n, int32_t *out_n)
+{
+    static const char annotation[] = " `p1";
+    const int32_t grow = (int32_t)sizeof annotation - 1;
+    int32_t pass, i, found = 0, o = 0;
+    char *out = 0;
+    for (pass = 0; pass < 2; pass++) {
+        for (i = 0; i < n;) {
+            int32_t j;
+            if (startsAnnotation(s, i, 0)) {
+                for (j = i; j < n && !pauseSpace((unsigned char)s[j]); j++);
+            } else if (i > 0 && pauseMark((unsigned char)s[i])
+                       && canPrecedeMark((unsigned char)s[i - 1])) {
+                for (j = i + 1; j < n && s[j] == s[i]; j++);
+                if (j == n || pauseSpace((unsigned char)s[j]) || s[j] == '/'
+                    || s[j] == '\\') {
+                    if (pass == 0) found++;
+                    else { memcpy(out + o, annotation, (size_t)grow); o += grow; }
+                }
+            } else j = i + 1;
+            if (pass == 1) {
+                memcpy(out + o, s + i, (size_t)(j - i));
+                o += j - i;
+            }
+            i = j;
+        }
+        if (pass == 0) {
+            if (!found) return 0;
+            out = (char *)cpp_new((uint32_t)(n + found * grow + 1));
+            if (!out) return 0;
+        }
+    }
+    out[o] = 0;
+    *out_n = o;
+    return out;
+}
+
+static int shortening(SynthThread *t)
+{
+    return ST_PAUSES(t) != PAUSES_NONE && !ST_PHONBUF(t);
+}
+
+static char *finishPauseStretch(SynthThread *t, const char *left)
+{
+    int32_t n = left ? (int32_t)strlen(left) : 0;
+    char *marked = 0, *out;
+    if (!shortening(t)) return 0;
+    if (n && ST_PAUSES(t) == PAUSES_ALWAYS) {
+        marked = shortenPunctuation(left, n, &n);
+        if (marked) left = marked;
+    }
+    if (ST_TAIL(t) != TAIL_OPEN) return marked;
+    out = (char *)cpp_new((uint32_t)n + (uint32_t)sizeof SHORT_PAUSE);
+    if (!out) return marked;
+    if (n) memcpy(out, left, (size_t)n);
+    memcpy(out + n, SHORT_PAUSE, sizeof SHORT_PAUSE);
+    if (marked) cpp_delete(marked);
+    return out;
+}
+
 /* ---- text into the engine ---- */
 
 /* A sentence the romanizer has finished with, on its way to the engine.
@@ -383,6 +522,17 @@ THIS void stw_addTextToEngine(SynthThread *t, char *text, int32_t len)
 
     memcpy(copy, text, (size_t)len);
     copy[len] = 0;
+
+    ST_TAIL(t) = tailOfText(copy, len, ST_TAIL(t));
+    if (ST_PAUSES(t) == PAUSES_ALWAYS && !ST_PHONBUF(t)) {
+        int32_t changed_len;
+        char *changed = shortenPunctuation(copy, len, &changed_len);
+        if (changed) {
+            cpp_delete(copy);
+            copy = changed;
+            len = changed_len;
+        }
+    }
 
     if (copy[len - 1] != ' ')
         ST_SAMPLES(t) += 1;
@@ -411,6 +561,7 @@ THIS void stw_addTextToEngine(SynthThread *t, char *text, int32_t len)
 THIS void stw_processRemaining(SynthThread *t)
 {
     char *left = 0;
+    char *made;
     int32_t n;
     EngCommand command;
 
@@ -420,9 +571,16 @@ THIS void stw_processRemaining(SynthThread *t)
     else if (n == 0)
         left = 0;
 
+    if (left)
+        ST_TAIL(t) = tailOfText(left, (int32_t)strlen(left), ST_TAIL(t));
+    made = finishPauseStretch(t, left);
+    ST_TAIL(t) = TAIL_NONE;
+
     command = (EngCommand)ENG_CALL(t, ENG_COMMAND);
-    if (command(ST_ENGINE(t), left))
+    if (command(ST_ENGINE(t), made ? made : left))
         stb_postEngineError(t);
+    if (made)
+        cpp_delete(made);
 
     if (ST_SAMPLES(t) > 0)
         stb_wordCallback(t, ST_SAMPLES(t));

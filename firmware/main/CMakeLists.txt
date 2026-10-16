@@ -1,16 +1,16 @@
 set(OPENEVV "${CMAKE_CURRENT_LIST_DIR}/../../vendor/openevv-perf")
-set(EVV_APP_SOURCE "paragraph_reader_stable_main.c" CACHE STRING
+set(RR_APP_SOURCE "paragraph_reader_stable_main.c" CACHE STRING
     "Firmware entry point; use button_speech_main.c for the keypad demo")
 set(EVV_LANGUAGE "enus" CACHE STRING
     "OpenEVV language module to compile (for example enus, engb or frfr)")
-set(EVV_SPEECH_ENGINE "openevv" CACHE STRING
-    "Speech backend to compile (openevv, pico, openbst, dectalk, dectalk43 or monologue)")
-set(EVV_PICO_VOICE "en-US" CACHE STRING
+set(RR_SPEECH_ENGINE "openevv" CACHE STRING
+    "Speech backend to compile (openevv, pico, openbst, dectalk, dectalk43, monologue, doubletalk or truvoice)")
+set(RR_PICO_VOICE "en-US" CACHE STRING
     "Pico voice variant (en-US, en-GB, de-DE, es-ES, fr-FR or it-IT)")
-set(EVV_OPENBST_BUILD "1998ENG" CACHE STRING
+set(RR_OPENBST_BUILD "1998ENG" CACHE STRING
     "OpenBST build name")
 
-if(EVV_SPEECH_ENGINE STREQUAL "openevv" AND NOT EXISTS "${OPENEVV}/lang/${EVV_LANGUAGE}/delta_lang_${EVV_LANGUAGE}.c")
+if(RR_SPEECH_ENGINE STREQUAL "openevv" AND NOT EXISTS "${OPENEVV}/lang/${EVV_LANGUAGE}/delta_lang_${EVV_LANGUAGE}.c")
     message(FATAL_ERROR "Unknown OpenEVV language '${EVV_LANGUAGE}'")
 endif()
 
@@ -49,13 +49,13 @@ set(APP_REQUIREMENTS
     esp_timer esp_psram esp_driver_i2s esp_adc nvs_flash esp_wifi
     esp_event esp_netif esp_http_server fatfs sdmmc mdns app_update
     esp-tls mbedtls lwip esp_driver_tsens esp_audio_codec)
-message(STATUS "Firmware source ${EVV_APP_SOURCE}; requirements ${APP_REQUIREMENTS}")
+message(STATUS "Firmware source ${RR_APP_SOURCE}; requirements ${APP_REQUIREMENTS}")
 
 # Dropbox may leave the historic network entry point as an inaccessible
 # placeholder.  Keep the public build argument stable while compiling the
 # locally maintained network-services entry point.
-set(APP_ENTRY_SOURCE "${EVV_APP_SOURCE}")
-if("${EVV_APP_SOURCE}" STREQUAL "webdav_transfer_main.c")
+set(APP_ENTRY_SOURCE "${RR_APP_SOURCE}")
+if("${RR_APP_SOURCE}" STREQUAL "webdav_transfer_main.c")
     set(APP_ENTRY_SOURCE "network_services_main.c")
 endif()
 
@@ -66,7 +66,7 @@ set(APP_SOURCES
     "epub_text.c"
     )
 
-if(EVV_SPEECH_ENGINE STREQUAL "openevv")
+if(RR_SPEECH_ENGINE STREQUAL "openevv")
     list(APPEND APP_SOURCES
         "speech_engine_openevv.c"
         "${LANGUAGE_BINDING_SOURCE}"
@@ -77,48 +77,48 @@ if(EVV_SPEECH_ENGINE STREQUAL "openevv")
     set(SPEECH_INCLUDE_DIRS
         "${OPENEVV}/src"
         "${OPENEVV}/lang/${EVV_LANGUAGE}")
-elseif(EVV_SPEECH_ENGINE STREQUAL "pico")
+elseif(RR_SPEECH_ENGINE STREQUAL "pico")
     set(PICO_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../vendor/picotts/pico")
-    if(EVV_PICO_VOICE STREQUAL "en-US")
+    if(RR_PICO_VOICE STREQUAL "en-US")
         set(PICO_TA "en-US_ta.bin")
         set(PICO_SG "en-US_lh0_sg.bin")
         set(PICO_TA_SYMBOL "_binary_en_US_ta_bin")
         set(PICO_SG_SYMBOL "_binary_en_US_lh0_sg_bin")
-    elseif(EVV_PICO_VOICE STREQUAL "en-GB")
+    elseif(RR_PICO_VOICE STREQUAL "en-GB")
         set(PICO_TA "en-GB_ta.bin")
         set(PICO_SG "en-GB_kh0_sg.bin")
         set(PICO_TA_SYMBOL "_binary_en_GB_ta_bin")
         set(PICO_SG_SYMBOL "_binary_en_GB_kh0_sg_bin")
-    elseif(EVV_PICO_VOICE STREQUAL "de-DE")
+    elseif(RR_PICO_VOICE STREQUAL "de-DE")
         set(PICO_TA "de-DE_ta.bin")
         set(PICO_SG "de-DE_gl0_sg.bin")
         set(PICO_TA_SYMBOL "_binary_de_DE_ta_bin")
         set(PICO_SG_SYMBOL "_binary_de_DE_gl0_sg_bin")
-    elseif(EVV_PICO_VOICE STREQUAL "es-ES")
+    elseif(RR_PICO_VOICE STREQUAL "es-ES")
         set(PICO_TA "es-ES_ta.bin")
         set(PICO_SG "es-ES_zl0_sg.bin")
         set(PICO_TA_SYMBOL "_binary_es_ES_ta_bin")
         set(PICO_SG_SYMBOL "_binary_es_ES_zl0_sg_bin")
-    elseif(EVV_PICO_VOICE STREQUAL "fr-FR")
+    elseif(RR_PICO_VOICE STREQUAL "fr-FR")
         set(PICO_TA "fr-FR_ta.bin")
         set(PICO_SG "fr-FR_nk0_sg.bin")
         set(PICO_TA_SYMBOL "_binary_fr_FR_ta_bin")
         set(PICO_SG_SYMBOL "_binary_fr_FR_nk0_sg_bin")
-    elseif(EVV_PICO_VOICE STREQUAL "it-IT")
+    elseif(RR_PICO_VOICE STREQUAL "it-IT")
         set(PICO_TA "it-IT_ta.bin")
         set(PICO_SG "it-IT_cm0_sg.bin")
         set(PICO_TA_SYMBOL "_binary_it_IT_ta_bin")
         set(PICO_SG_SYMBOL "_binary_it_IT_cm0_sg_bin")
     else()
-        message(FATAL_ERROR "Unknown Pico voice '${EVV_PICO_VOICE}'")
+        message(FATAL_ERROR "Unknown Pico voice '${RR_PICO_VOICE}'")
     endif()
     file(GLOB PICO_SOURCES "${PICO_ROOT}/lib/*.c")
     list(APPEND APP_SOURCES "speech_engine_pico.c" ${PICO_SOURCES})
     set(SPEECH_INCLUDE_DIRS "${PICO_ROOT}/lib")
-elseif(EVV_SPEECH_ENGINE STREQUAL "openbst")
+elseif(RR_SPEECH_ENGINE STREQUAL "openbst")
     set(OPENBST_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../vendor/openbst")
-    if(NOT EXISTS "${OPENBST_ROOT}/src/data/${EVV_OPENBST_BUILD}.c")
-        message(FATAL_ERROR "Unknown OpenBST build '${EVV_OPENBST_BUILD}'")
+    if(NOT EXISTS "${OPENBST_ROOT}/src/data/${RR_OPENBST_BUILD}.c")
+        message(FATAL_ERROR "Unknown OpenBST build '${RR_OPENBST_BUILD}'")
     endif()
     set(OPENBST_MODULES
         text dict lts cursors wordstream stress assemble tokenise translit
@@ -130,10 +130,10 @@ elseif(EVV_SPEECH_ENGINE STREQUAL "openbst")
     list(APPEND APP_SOURCES
         "speech_engine_openbst.c"
         "openbst_2006eng_index.c"
-        "${OPENBST_ROOT}/src/data/${EVV_OPENBST_BUILD}.c"
+        "${OPENBST_ROOT}/src/data/${RR_OPENBST_BUILD}.c"
         ${OPENBST_SOURCES})
     set(SPEECH_INCLUDE_DIRS "${OPENBST_ROOT}/include")
-elseif(EVV_SPEECH_ENGINE STREQUAL "dectalk")
+elseif(RR_SPEECH_ENGINE STREQUAL "dectalk")
     set(DECTALK_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../vendor/dectalk-dtc01-reborn")
     set(DECTALK_SOURCES
         ${DECTALK_ROOT}/src/api/ttsapi.c
@@ -171,7 +171,7 @@ elseif(EVV_SPEECH_ENGINE STREQUAL "dectalk")
         "${DECTALK_ROOT}/src/speech"
         "${DECTALK_ROOT}/src/kernel")
     list(APPEND APP_REQUIREMENTS pthread)
-elseif(EVV_SPEECH_ENGINE STREQUAL "dectalk43")
+elseif(RR_SPEECH_ENGINE STREQUAL "dectalk43")
     set(DT43_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../vendor/dectalk43/src")
     set(DT43_SRC "${DT43_ROOT}/dapi/src")
     set(DT43_SOURCES
@@ -233,7 +233,7 @@ elseif(EVV_SPEECH_ENGINE STREQUAL "dectalk43")
         "${DT43_SRC}/ph" "${DT43_SRC}/protos" "${DT43_SRC}/vtm"
         "${DT43_SRC}/hlsyn")
     list(APPEND APP_REQUIREMENTS pthread)
-elseif(EVV_SPEECH_ENGINE STREQUAL "monologue")
+elseif(RR_SPEECH_ENGINE STREQUAL "monologue")
     set(MONOLOGUE_ROOT
         "${CMAKE_CURRENT_LIST_DIR}/../../vendor/provoice-reborn")
     set(MONOLOGUE_SOURCES
@@ -255,11 +255,63 @@ elseif(EVV_SPEECH_ENGINE STREQUAL "monologue")
         "speech_engine_monologue.c"
         "monologue_port.c"
         ${MONOLOGUE_SOURCES})
+    # The original Windows runtime exported a generic mem_free symbol.  lwIP
+    # exports the same name, so namespace the Monologue copy when networking is
+    # linked into the same firmware image.
+    set_source_files_properties(
+        "speech_engine_monologue.c" "monologue_port.c"
+        ${MONOLOGUE_SOURCES}
+        PROPERTIES COMPILE_DEFINITIONS "mem_free=monologue_mem_free")
     set(SPEECH_INCLUDE_DIRS
         "${CMAKE_CURRENT_LIST_DIR}/monologue"
         "${MONOLOGUE_ROOT}/include")
+elseif(RR_SPEECH_ENGINE STREQUAL "doubletalk")
+    set(DOUBLETALK_ROOT
+        "${CMAKE_CURRENT_LIST_DIR}/../../vendor/doubletalk-pc/doubletalk")
+    set(DOUBLETALK_NATIVE_ROOT
+        "${CMAKE_CURRENT_LIST_DIR}/../../../experiments/doubletalk-native")
+    list(APPEND APP_SOURCES
+        "speech_engine_doubletalk.cpp"
+        "${DOUBLETALK_ROOT}/shim/emu.cpp"
+        "${DOUBLETALK_ROOT}/mame/i86.cpp"
+        "${DOUBLETALK_ROOT}/mame/i186.cpp"
+        "${DOUBLETALK_ROOT}/doubletalk_board.cpp"
+        "${DOUBLETALK_ROOT}/dtalk.cpp"
+        "${DOUBLETALK_NATIVE_ROOT}/doubletalk_frame.c"
+        "${DOUBLETALK_NATIVE_ROOT}/doubletalk_scheduler.c")
+    set(SPEECH_INCLUDE_DIRS
+        "${DOUBLETALK_ROOT}"
+        "${DOUBLETALK_ROOT}/shim"
+        "${DOUBLETALK_ROOT}/mame"
+        "${DOUBLETALK_NATIVE_ROOT}")
+elseif(RR_SPEECH_ENGINE STREQUAL "truvoice")
+    set(TRUVOICE_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../vendor/truvoice")
+    set(TRUVOICE_BE "${TRUVOICE_ROOT}/tv_src/backend")
+    set(TRUVOICE_FE "${TRUVOICE_ROOT}/tv_src/frontend")
+    set(TRUVOICE_GEN "${TRUVOICE_ROOT}/generated")
+    file(GLOB TRUVOICE_ENGINE_SOURCES "${TRUVOICE_BE}/engine/*.c")
+    list(REMOVE_ITEM TRUVOICE_ENGINE_SOURCES "${TRUVOICE_BE}/engine/sapi.c")
+    file(GLOB TRUVOICE_FRONTEND_SOURCES "${TRUVOICE_FE}/*.c")
+    list(FILTER TRUVOICE_FRONTEND_SOURCES EXCLUDE REGEX "_bridge\\.c$")
+    list(APPEND APP_SOURCES
+        "speech_engine_truvoice.c"
+        "${TRUVOICE_BE}/port/msvcrt.c"
+        "${TRUVOICE_BE}/port/stubs.c"
+        "${TRUVOICE_BE}/port/embedded_state.c"
+        "${TRUVOICE_BE}/port/truvoice.c"
+        "${TRUVOICE_BE}/port/userdic.c"
+        "${TRUVOICE_BE}/port/email.c"
+        "${TRUVOICE_GEN}/fe_data.c"
+        "${TRUVOICE_GEN}/tvdata.s"
+        ${TRUVOICE_ENGINE_SOURCES}
+        ${TRUVOICE_FRONTEND_SOURCES})
+    set(SPEECH_INCLUDE_DIRS
+        "${TRUVOICE_BE}"
+        "${TRUVOICE_BE}/port"
+        "${TRUVOICE_FE}"
+        "${TRUVOICE_GEN}")
 else()
-    message(FATAL_ERROR "Unknown speech backend '${EVV_SPEECH_ENGINE}'")
+    message(FATAL_ERROR "Unknown speech backend '${RR_SPEECH_ENGINE}'")
 endif()
 set(APP_EMBED_FILES
     "../tones/UI.wav"
@@ -272,23 +324,27 @@ set(APP_EMBED_FILES
     "../tones/recording-started.wav"
     "../tones/recording-stopped.wav")
 
-if(EVV_SPEECH_ENGINE STREQUAL "pico")
+if(RR_SPEECH_ENGINE STREQUAL "pico")
     list(APPEND APP_EMBED_FILES
         "../../vendor/picotts/pico/lang/${PICO_TA}"
         "../../vendor/picotts/pico/lang/${PICO_SG}")
 endif()
 
-if(EVV_SPEECH_ENGINE STREQUAL "monologue")
+if(RR_SPEECH_ENGINE STREQUAL "monologue")
     list(APPEND APP_EMBED_FILES
         "../voices/monologue-xen11k8.pack")
 endif()
 
-if(EVV_SPEECH_ENGINE STREQUAL "dectalk43")
+if(RR_SPEECH_ENGINE STREQUAL "doubletalk")
+    list(APPEND APP_EMBED_FILES "../voices/doubletalkpc.bin")
+endif()
+
+if(RR_SPEECH_ENGINE STREQUAL "dectalk43")
     list(APPEND APP_EMBED_FILES
         "../../vendor/dectalk43/ports/emscripten/fs/dtalk_us.dic")
 endif()
 
-if("${EVV_APP_SOURCE}" STREQUAL "webdav_transfer_main.c")
+if("${APP_ENTRY_SOURCE}" STREQUAL "network_services_main.c")
     list(APPEND APP_SOURCES "remsound_receiver.c" "remsound_numbers.c")
     file(GLOB REMSOUND_WAVS RELATIVE "${CMAKE_CURRENT_LIST_DIR}"
          "${CMAKE_CURRENT_LIST_DIR}/../tones/remsound/*.wav")
@@ -321,48 +377,71 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE
     EVV_NO_BYTECODE=1
     EVV_FRAME_STACK=65536)
 
-if(EVV_SPEECH_ENGINE STREQUAL "pico")
+if(RR_SPEECH_ENGINE STREQUAL "truvoice")
     target_compile_definitions(${COMPONENT_LIB} PRIVATE
-        EVV_ENGINE_SAMPLE_RATE=16000
+        RR_ENGINE_SAMPLE_RATE=11025)
+    target_compile_options(${COMPONENT_LIB} PRIVATE
+        -fwrapv -Wno-incompatible-pointer-types
+        -Wno-stringop-overflow -Wno-stringop-truncation)
+endif()
+
+if(RR_SPEECH_ENGINE STREQUAL "doubletalk")
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE
+        DTALK_HOTBLOCKS=1
+        DTALK_NATIVE_DAC_ISR=1
+        DTALK_NATIVE_ACOUSTIC=1)
+    # ESP-IDF globally suppresses jump tables, but the 80C188 interpreter's
+    # central opcode switch is a textbook jump-table workload.  These files
+    # are not interrupt handlers, so flash-resident table dispatch is safe and
+    # avoids a comparison tree for every emulated instruction.
+    set_source_files_properties(
+        "${DOUBLETALK_ROOT}/mame/i86.cpp"
+        "${DOUBLETALK_ROOT}/mame/i186.cpp"
+        PROPERTIES COMPILE_OPTIONS "-fjump-tables;-ftree-switch-conversion")
+endif()
+
+if(RR_SPEECH_ENGINE STREQUAL "pico")
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE
+        RR_ENGINE_SAMPLE_RATE=16000
         __BYTE_ORDER=__BYTE_ORDER__
         __BIG_ENDIAN=__ORDER_BIG_ENDIAN__)
     set_source_files_properties("speech_engine_pico.c" PROPERTIES
       COMPILE_DEFINITIONS
-        "PICO_VOICE_TAG=\"${EVV_PICO_VOICE}\";PICO_TA_FILENAME=\"${PICO_TA}\";PICO_SG_FILENAME=\"${PICO_SG}\";PICO_TA_SYMBOL=${PICO_TA_SYMBOL};PICO_SG_SYMBOL=${PICO_SG_SYMBOL}")
+        "PICO_VOICE_TAG=\"${RR_PICO_VOICE}\";PICO_TA_FILENAME=\"${PICO_TA}\";PICO_SG_FILENAME=\"${PICO_SG}\";PICO_TA_SYMBOL=${PICO_TA_SYMBOL};PICO_SG_SYMBOL=${PICO_SG_SYMBOL}")
 endif()
 
-if(EVV_SPEECH_ENGINE STREQUAL "openbst")
-    if(EVV_OPENBST_BUILD STREQUAL "1995"
-       OR EVV_OPENBST_BUILD MATCHES "^1998")
+if(RR_SPEECH_ENGINE STREQUAL "openbst")
+    if(RR_OPENBST_BUILD STREQUAL "1995"
+       OR RR_OPENBST_BUILD MATCHES "^1998")
         set(OPENBST_SAMPLE_RATE 11025)
-    elseif(EVV_OPENBST_BUILD STREQUAL "2006RUS")
+    elseif(RR_OPENBST_BUILD STREQUAL "2006RUS")
         set(OPENBST_SAMPLE_RATE 10800)
     else()
         set(OPENBST_SAMPLE_RATE 10000)
     endif()
     target_compile_definitions(${COMPONENT_LIB} PRIVATE
-        EVV_ENGINE_SAMPLE_RATE=${OPENBST_SAMPLE_RATE})
+        RR_ENGINE_SAMPLE_RATE=${OPENBST_SAMPLE_RATE})
     set_source_files_properties(
       "speech_engine_openbst.c" "openbst_2006eng_index.c" PROPERTIES
       COMPILE_DEFINITIONS
-        "OPENBST_BUILD_NAME=\"${EVV_OPENBST_BUILD}\";OPENBST_DATA_SYMBOL=BST_DATA_${EVV_OPENBST_BUILD}")
+        "OPENBST_BUILD_NAME=\"${RR_OPENBST_BUILD}\";OPENBST_DATA_SYMBOL=BST_DATA_${RR_OPENBST_BUILD}")
 endif()
 
-if(EVV_SPEECH_ENGINE STREQUAL "dectalk")
+if(RR_SPEECH_ENGINE STREQUAL "dectalk")
     target_compile_definitions(${COMPONENT_LIB} PRIVATE
-        EVV_ENGINE_SAMPLE_RATE=10000)
+        RR_ENGINE_SAMPLE_RATE=10000)
     set_source_files_properties(
         "${DECTALK_ROOT}/src/kernel/kernel.c"
         "${DECTALK_ROOT}/src/speech/engine.c" PROPERTIES
         COMPILE_DEFINITIONS "sem_wait=dtc01_sem_wait")
 endif()
 
-if(EVV_SPEECH_ENGINE STREQUAL "dectalk43")
+if(RR_SPEECH_ENGINE STREQUAL "dectalk43")
     target_compile_definitions(${COMPONENT_LIB} PRIVATE
-        EVV_ENGINE_SAMPLE_RATE=11025 _REENTRANT NOMME LTSSIM TTSSIM
+        RR_ENGINE_SAMPLE_RATE=11025 _REENTRANT NOMME LTSSIM TTSSIM
         ANSI BLD_DECTALK_DLL US_ENGLISH ENGLISH_US ENGLISH ACNA
         ACCESS32 TYPING_MODE DEC
-        DECTALK_INSTALL_PREFIX="/sdcard/.evv/voices/dectalk43")
+        DECTALK_INSTALL_PREFIX="/sdcard/.rr/voices/dectalk43")
     target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-error=all
         -Wno-error=pointer-sign -Wno-error=misleading-indentation
         -Wno-error=missing-braces -Wno-error=unused-label
@@ -371,10 +450,11 @@ if(EVV_SPEECH_ENGINE STREQUAL "dectalk43")
         -Wno-error=dangling-else)
 endif()
 
-if("${EVV_APP_SOURCE}" STREQUAL "webdav_transfer_main.c")
+if("${APP_ENTRY_SOURCE}" STREQUAL "network_services_main.c")
     if(DEFINED TRANSFER_WIFI_SSID AND DEFINED TRANSFER_WIFI_PASSWORD)
         target_compile_definitions(${COMPONENT_LIB} PRIVATE
             TRANSFER_WIFI_SSID="${TRANSFER_WIFI_SSID}"
             TRANSFER_WIFI_PASSWORD="${TRANSFER_WIFI_PASSWORD}")
     endif()
 endif()
+

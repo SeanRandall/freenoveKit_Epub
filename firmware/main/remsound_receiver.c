@@ -194,9 +194,9 @@ static bool read_config(rem_config_t *config)
     memset(config, 0, sizeof(*config));
     config->port = DEFAULT_AUDIO_PORT;
     config->volume = 70;
-    FILE *file = fopen(CARD_ROOT "/.evv/remsound.ini", "rb");
+    FILE *file = fopen(CARD_ROOT "/.rr/remsound.ini", "rb");
     if (!file)
-        file = fopen(CARD_ROOT "/.evv/REMSOUND.INI", "rb");
+        file = fopen(CARD_ROOT "/.rr/REMSOUND.INI", "rb");
     if (!file) {
         ESP_LOGE(TAG, "configuration open failed: errno=%d", errno);
         return false;

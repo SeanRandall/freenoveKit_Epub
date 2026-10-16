@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 $Repo = Split-Path -Parent $PSScriptRoot
 $Release = Join-Path $Repo 'release'
-$Scratch = Join-Path $env:TEMP 'evv-reader-installer-build'
+$Scratch = Join-Path $env:TEMP 'retroreader-installer-build'
 $Dist = Join-Path $Scratch 'dist'
 $Work = Join-Path $Scratch 'work'
 $Spec = Join-Path $Scratch 'spec'
@@ -14,7 +14,7 @@ if (-not (Test-Path $Python)) { python -m venv $Venv }
 & $Python -m pip install --disable-pip-version-check esptool pyinstaller
 if ($LASTEXITCODE -ne 0) { throw "Installing build dependencies failed with exit code $LASTEXITCODE" }
 & $Python -m PyInstaller --noconfirm --clean --onefile `
-    --name EVV-Reader-Installer `
+    --name RetroReader-Installer `
     --collect-data esptool `
     --distpath $Dist `
     --workpath $Work `
@@ -22,5 +22,5 @@ if ($LASTEXITCODE -ne 0) { throw "Installing build dependencies failed with exit
     (Join-Path $PSScriptRoot 'windows_flasher.py')
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed with exit code $LASTEXITCODE" }
 
-Copy-Item (Join-Path $Dist 'EVV-Reader-Installer.exe') $Release -Force
-Write-Host "Built $Release\EVV-Reader-Installer.exe"
+Copy-Item (Join-Path $Dist 'RetroReader-Installer.exe') $Release -Force
+Write-Host "Built $Release\RetroReader-Installer.exe"

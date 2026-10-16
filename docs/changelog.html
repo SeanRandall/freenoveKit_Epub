@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Changelog — Retroreader</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip-link" href="#content">Skip to content</a>
+  <header class="site-header"><a class="brand" href="index.html">Retroreader</a><nav aria-label="Main navigation"><a href="index.html">Home</a><a href="get-a-kit.html">Get a kit</a><a href="why-not.html">Why not?</a><a href="compare.html">Compare</a><a href="voices.html">Voice samples</a><a href="install.html">Install</a><a href="using-the-reader.html">Documentation</a><a aria-current="page" href="changelog.html">Changelog</a><a href="about.html">About Sean</a><a href="https://github.com/SeanRandall/freenoveKit_Epub">GitHub</a></nav></header>
+  <main id="content">
+<h1>Retroreader changelog</h1>
+<p>Retroreader remains alpha software. Releases may change settings, storage
+layouts and behaviour without preserving compatibility with earlier builds.</p>
+<h2>2026.10.16 — pre-release</h2>
+<p>This is the first date-numbered Retroreader release and a substantial change
+to how speech engines and firmware images are packaged.</p>
+<h3>Highlights</h3>
+<ul>
+<li>Use the chosen speech engine consistently across the reader, menus, file
+  transfer and NVDA Remote, rather than falling back to OpenEVV in network
+  modes.</li>
+<li>Provide one complete firmware image for each engine and voice. The web
+  installer and downloadable files now use the exact same images.</li>
+<li>Add OpenEVV pause modes: always pause, pause at sentence endings, or disable
+  automatic pauses. Eloquence fans will want to set this to always for a faster reading experience, which sounds counterintuitive.</li>
+<li>Improve long-sentence splitting so speech is not unnecessarily broken in
+  the middle of a sentence. Examples of this were rare, but it broke my flow.</li>
+<li>Add an accessible browser file manager at <code>/web</code> alongside WebDAV file
+  transfer, with browsing, upload, download, rename, folder creation and
+  deletion.</li>
+<li>Expand the website documentation, installation guidance, speech samples and
+  measured speaking-rate information.</li>
+</ul>
+<h3>Identity and storage changes</h3>
+<ul>
+<li>Rename product-specific identifiers from EVV to Retroreader or RR. OpenEVV
+  remains the name of one available speech engine.</li>
+<li>Change device hostnames from <code>EVVxxxx</code> to <code>RRxxxx</code>.</li>
+<li>Change the hidden SD-card settings folder from <code>.evv</code> to <code>.rr</code>.</li>
+<li>Supply a new SD-card template for the revised layout. Earlier alpha layouts
+  are not supported by this release.</li>
+</ul>
+<h3>Speech engines</h3>
+<p>Complete images are prepared for:</p>
+<ul>
+<li>OpenEVV (Eloquence), US and British English;</li>
+<li>SVOX Pico, US and British English;</li>
+<li>DECtalk DTC-01;</li>
+<li>DECtalk 4.3;</li>
+<li>OpenBST (Keynote Gold), 1998 English;</li>
+<li>Monologue XEN11K8; and</li>
+<li>TruVoice US English.</li>
+</ul>
+<h3>Packaging</h3>
+<ul>
+<li>Introduce a dated firmware manifest as the single catalogue used by release
+  builds, direct downloads and the browser installer.</li>
+<li>Replace separate bootloader, reader and network-service downloads with one
+  complete <code>.bin</code> file per engine and voice.</li>
+<li>Rebuild the standalone Windows installer for the complete images.</li>
+<li>Add SHA-256 checksums for downloadable firmware.</li>
+</ul>
+<h2>0.5 alpha — 13 October 2026</h2>
+<ul>
+<li>Added TruVoice US English to the public installer and downloads.</li>
+<li>Added accessible browser-based SD-card file management.</li>
+<li>Expanded the voice-sample page with approximate speaking rates.</li>
+<li>Expanded website and SD-card documentation.</li>
+</ul>
+<h2>0.4 alpha — 9 October 2026</h2>
+<ul>
+<li>Renamed the project from EVV Reader to Retroreader.</li>
+<li>Added a modular speech-engine interface and public engine selection.</li>
+<li>Added Monologue XEN11K8 with rate, pitch, voice-volume, dictionary and pause
+  controls.</li>
+<li>Added DECtalk DTC-01, OpenBST 1998 English and SVOX Pico builds alongside
+  OpenEVV.</li>
+<li>Added British English OpenEVV and Pico builds.</li>
+<li>Launched the Retroreader website, cross-platform web installer and speech
+  sample pages.</li>
+</ul>
+<h2>0.3 alpha — 6 October 2026</h2>
+<ul>
+<li>Added folder-aware library browsing, recent files and configurable sorting.</li>
+<li>Added plain-text, MP3, M4A and M4B support.</li>
+<li>Added improved EPUB indexing, SD-card caching and support for much larger
+  books.</li>
+<li>Expanded navigation, status and reader settings.</li>
+<li>Improved recording reliability and keypad responsiveness.</li>
+<li>Added conditional File Transfer, NVDA Remote and RemSound modes, shown only
+  when their configuration files are present.</li>
+<li>Added the browser-based Web Serial installer.</li>
+<li>Included clean Wi-Fi, NVDA Remote and RemSound configuration examples in the
+  SD-card template.</li>
+</ul>
+<h2>0.2 alpha — 1 October 2026</h2>
+<ul>
+<li>Added the full SD-card template to the downloadable package.</li>
+<li>Added example configuration files and the reader guide.</li>
+<li>Added my tactile physical description of the Freenove kit to the
+  guide.</li>
+</ul>
+<h2>0.1 alpha — 1 October 2026</h2>
+<ul>
+<li>First public alpha for the Freenove Media Kit for ESP32-S3, 1.14-inch model.</li>
+<li>Included a standalone Windows installer and complete US English, British
+  English and French-voice OpenEVV firmware images.</li>
+<li>The French voice retained the English user interface.</li>
+</ul>
+  </main>
+  <footer><p>&copy; 2026 <a href="https://uk.linkedin.com/in/accessiblesean">Sean Randall</a>. Retroreader is an open-source project.</p></footer>
+</body>
+</html>

@@ -11,6 +11,11 @@ sdkconfig.old
 __pycache__/
 
 # Never commit live credentials copied from the example files.
-sd-card/.evv/WIFI.INI
-sd-card/.evv/nvdaremote.ini
+sd-card/.rr/WIFI.INI
+sd-card/.rr/nvdaremote.ini
+sd-card/.rr/remsound.ini
+
+# Local-only proprietary DoubleTalk firmware and experimental source checkout.
+firmware/voices/doubletalkpc.bin
+vendor/doubletalk-pc/
 

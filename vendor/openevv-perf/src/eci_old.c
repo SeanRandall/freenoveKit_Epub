@@ -466,7 +466,10 @@ static OldInst *eo_newInstance(int32_t language, int told)
     h = (OldInst *)malloc(INSTANCE_BYTES);
     if (!h)
         return 0;
+
     memset(h, 0, INSTANCE_BYTES);
+    h->pauses = g_DefaultPauses;
+    h->pauses_sent = PAUSES_DEFAULT;
 
     voices = cpp_new(CONCAT_VOICES_BYTES);
     OI_CONCAT(h) = voices ? scv_ctor(voices) : 0;

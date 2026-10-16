@@ -8,10 +8,9 @@
 </head>
 <body>
   <a class="skip-link" href="#content">Skip to content</a>
-  <header class="site-header"><a class="brand" href="index.html">Retroreader</a><nav aria-label="Main navigation"><a href="index.html">Home</a><a href="get-a-kit.html">Get a kit</a><a href="why-not.html">Why not?</a><a href="compare.html">Compare</a><a href="voices.html">Voice samples</a><a href="install.html">Install</a><a aria-current="page" href="using-the-reader.html">Documentation</a><a href="about.html">About Sean</a><a href="https://github.com/SeanRandall/freenoveKit_Epub">GitHub</a></nav></header>
+  <header class="site-header"><a class="brand" href="index.html">Retroreader</a><nav aria-label="Main navigation"><a href="index.html">Home</a><a href="get-a-kit.html">Get a kit</a><a href="why-not.html">Why not?</a><a href="compare.html">Compare</a><a href="voices.html">Voice samples</a><a href="install.html">Install</a><a href="using-the-reader.html">Documentation</a><a href="changelog.html">Changelog</a><a href="about.html">About Sean</a><a href="https://github.com/SeanRandall/freenoveKit_Epub">GitHub</a></nav></header>
   <main id="content">
-    <nav aria-label="Documentation"><h2>Documentation</h2><ul><li><a href="preparing-the-sd-card.html">Preparing the SD card</a></li><li><a href="wireless-file-transfer.html">Wireless file transfer</a></li><li><a href="using-the-reader.html">Using the reader</a></li><li><a href="physical-description.html">Physical description</a></li></ul></nav>
-    <h1>Preparing the SD card</h1>
+<h1>Preparing the SD card</h1>
 <h2>What you need</h2>
 <ul>
 <li>A microSD card formatted as FAT32. The 1GB card shipped by Freenove is suitable.</li>
@@ -23,12 +22,12 @@
 <ol>
 <li>Download and extract the SD-card template.</li>
 <li>Copy the <strong>contents</strong> of the extracted "sd-card" folder to the root of the card. Do not copy the containing folder itself.</li>
-<li>Keep the ".evv" directory. It stores configuration, book indexes, reading state and recordings.</li>
+<li>Keep the ".rr" directory. It stores configuration, book indexes, reading state and recordings.</li>
 <li>Copy books and audio into any folder structure you prefer. Retroreader browses the card directly and does not require a special library folder.</li>
 <li>Eject the card safely before removing it from the computer.</li>
 </ol>
 <h2>Configure Wi-Fi</h2>
-<p>Inside ".evv", rename "WIFI.INI.example" to "WIFI.INI". Edit it as plain text:</p>
+<p>Inside ".rr", rename "WIFI.INI.example" to "WIFI.INI". Edit it as plain text:</p>
 <pre><code class="language-ini">ssid=YOUR_WIFI_NETWORK
 password=YOUR_WIFI_PASSWORD
 </code></pre>
@@ -42,12 +41,12 @@ password=YOUR_WIFI_PASSWORD
 </ul>
 <p>The template contains commented examples. Rename an example only when you intend to configure that service.</p>
 <h2>Updating or replacing a card</h2>
-<p>Keep a backup of the entire card, especially ".evv/recordings" and any books that are not stored elsewhere. Cached book data can be regenerated, but recordings and personal files cannot.</p>
+<p>Keep a backup of the entire card, especially ".rr/recordings" and any books that are not stored elsewhere. Cached book data can be regenerated, but recordings and personal files cannot.</p>
 <h2>Troubleshooting checklist</h2>
 <ul>
 <li>Confirm the card is FAT32 rather than exFAT or NTFS.</li>
-<li>Confirm ".evv" is at the card root.</li>
-<li>On Windows, enable <strong>Hidden items</strong> if ".evv" is not visible.</li>
+<li>Confirm ".rr" is at the card root.</li>
+<li>On Windows, enable <strong>Hidden items</strong> if ".rr" is not visible.</li>
 <li>Check that configuration files end in ".ini", not ".ini.txt".</li>
 <li>Use plain UTF-8 text and do not add quotation marks around Wi-Fi values.</li>
 </ul>

@@ -37,15 +37,15 @@ extern const uint8_t dt43_dictionary_end[]
 
 static bool install_dictionary(void)
 {
-    static const char *path = "/sdcard/.evv/voices/dectalk43/dtalk_us.dic";
+    static const char *path = "/sdcard/.rr/voices/dectalk43/dtalk_us.dic";
     size_t expected = (size_t)(dt43_dictionary_end - dt43_dictionary_start);
     struct stat current;
     if (stat(path, &current) == 0 && (size_t)current.st_size == expected)
         return true;
 
-    (void)mkdir("/sdcard/.evv", 0775);
-    (void)mkdir("/sdcard/.evv/voices", 0775);
-    (void)mkdir("/sdcard/.evv/voices/dectalk43", 0775);
+    (void)mkdir("/sdcard/.rr", 0775);
+    (void)mkdir("/sdcard/.rr/voices", 0775);
+    (void)mkdir("/sdcard/.rr/voices/dectalk43", 0775);
     FILE *file = fopen(path, "wb");
     if (!file) return false;
     bool ok = fwrite(dt43_dictionary_start, 1, expected, file) == expected;

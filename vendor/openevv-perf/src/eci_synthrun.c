@@ -249,6 +249,14 @@ THIS void setPhonemeIndiciesRun(SynthThread *t, int32_t on, int32_t seq)
     finished(t);
 }
 
+void setPausesRun(SynthThread *t, int32_t mode, int32_t seq)
+{
+    (void)seq;
+    stw_processRemaining(t);
+    ST_PAUSES(t) = mode;
+    finished(t);
+}
+
 /* A voice change is the widest of them: the sample format may have moved
    under it, the concatenative side may or may not have this voice, and if
    that answer has changed since last time the caller is told so. */

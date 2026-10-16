@@ -1,0 +1,98 @@
+              TextTalk (TTS) Software Release Notes
+                   Dialogic TTS for Windows NT
+                        Version 1.00
+
+Copyright © 1996 Dialogic Corporation
+All Rights Reserved
+
+TruVoice is a registered trademark of Centigram Communications.
+
+Release documented: TextTalk Version 1.0.  TextTalk is a software only 
+version of Centigram’s TruVoice Text-To-Speech converter that works with 
+Dialogic boards. This document contains software installation information and 
+product summary.
+
+This TTS software release package contains the following components:
+
+  a) A single installation routine that installs the TextTalk TTS software.
+
+  b) These release notes that provide information about changes, bug fixes, 
+  compatibility issues, and restrictions for each product’s software.
+
+
+Change Summary
+This is the first release
+
+
+New Features
+This is the first release
+
+
+Product summary
+Features of this release include 
+a) Supports 4 channels of  English TTS.
+b) Works with Dialogic System Release 96-11 and above.
+c) Supports a user dictionary tool (UserDict.exe).
+
+Product Features
+1) Password Security
+To enable TextTalk , you need to type in a password using the enablement 
+diskette shipped separately by Dialogic. You can also run TextTalk for 30 days 
+without purchasing a password from Dialogic. Please refer to the TextTalk 
+Password Installation Notes for more details.
+
+2)User Dictionary
+Run the tool UserDict.exe by clicking on the User Dictionary icon. Choose the 
+‘Dictionary’ button and it brings up the Pronunciation Manager window. The 
+user dictionary can be generated on one machine and copied to other machines. 
+The user dictionary is path name is stored in the registry entry key : 
+HKEY_CURRENT_USER\Software\Centigram\TextToSpeech\Dictionary.
+
+
+Hardware Installation
+Refer to the Voice Hardware Reference or the Quick Install Card for the board.
+
+
+Software Installation
+The TextTalk TTS Software should be installed after the  Dialogic Voice 
+software is installed.
+The installation package installs the `TextTalk TTS for Windows NT - Version 
+1.00`.
+To install the package follow the procedure below.
+1. Run setup.exe and follow the instructions on the screen.
+2. Install the enablement diskette that is shipped separately by Dialogic.
+3. Run the program pwinstal.exe to enable TextTalk.
+
+The Package installs the following directories :
+ a) CLIB : contain the Borland compatibility files.
+ a) INC : contains the include files
+ b) LIB : contains the DLL and lib files.
+ c) USERDICT : conatains the user dictionary tool.
+ d) SAMPLES : conatains a GUI and console demo with source code.
+
+NOTES:1. Dialogic System Release 96-11 for Windows NT must be installed 
+first.
+
+
+Demonstration Programs
+  1) To run the demo with more than 1 channel, type ttsdemo -c<number of 
+     channels> from the MS-DOS prompt.
+     The demo text file state01.inp can be modified to include any text 
+     that you want spoken.
+     All demo source code is provided.
+  2) A GUI demo and source code is also provided (SpeechApp.exe).
+
+
+Compatibility Issues
+This release is not compatible with any Dialogic System Release prior to 96-11.
+Restrictions and Limitations
+1. The maximum number of available concurrent channels is four (4).
+2. The package will not work until the enablement diskette is installed and the 
+program pwinstal.exe is run.
+3. The user dictionary tool (UserDict.exe) can be used without a wave device on the 
+machine, but no speech output will be played when the speaker button is clicked. To
+listen to the modified pronuncaition without a wave device, play the text using the 
+GUI demo (SpeechApp.exe). 
+
+
+

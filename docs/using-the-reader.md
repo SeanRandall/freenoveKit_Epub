@@ -52,19 +52,20 @@ The status submenu lets you enable, disable and reorder individual announcements
 
 ## Book opening and cache
 
-Indexed opening processes a book before reading starts, enabling full navigation and duration estimates immediately. Instant opening begins reading sooner and builds the complete index while paused. Large books take longer the first time. Extracted text, structure and metadata are cached under `.evv/.cache` on the SD card.
+Indexed opening processes a book before reading starts, enabling full navigation and duration estimates immediately. Instant opening begins reading sooner and builds the complete index while paused. Large books take longer the first time. Extracted text, structure and metadata are cached under `.rr/.cache` on the SD card.
 
 Clearing the book cache removes generated metadata but does not remove books. Previously processed books then take longer to open again.
 
 ## File transfer and network modes
 
-See [Wireless file transfer](wireless-file-transfer.md) for browser, Windows, macOS and Linux instructions. NVDA Remote and RemSound use their respective files under `.evv` and remain hidden when not configured.
+See [Wireless file transfer](wireless-file-transfer.md) for browser, Windows, macOS and Linux instructions. NVDA Remote and RemSound use their respective files under `.rr` and remain hidden when not configured.
 
 ## Recordings
 
-Recordings are stored beneath `.evv/recordings`, grouped by the current book when possible. Back them up: they are personal files and cannot be regenerated from the book cache.
+Recordings are stored beneath `.rr/recordings`, grouped by the current book when possible. Back them up: they are personal files and cannot be regenerated from the book cache.
 
 ## Alpha limitations
 
 Keep backups of books and recordings. When reporting a fault, include the installed speech engine, the action being performed, the spoken message, whether playback was active or paused, and whether the unit recovered after reset.
+
 

@@ -1,5 +1,5 @@
-#ifndef EVV_SPEECH_ENGINE_H
-#define EVV_SPEECH_ENGINE_H
+#ifndef RR_SPEECH_ENGINE_H
+#define RR_SPEECH_ENGINE_H
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -21,6 +21,8 @@ typedef enum {
     SPEECH_SETTING_VOICE,
     SPEECH_SETTING_ANNOTATED_INPUT,
     SPEECH_SETTING_SENTENCE_PAUSE,
+    SPEECH_SETTING_RATE_BOOST,
+    SPEECH_SETTING_PAUSE_MODE,
     SPEECH_SETTING_COUNT,
 } speech_setting_id_t;
 
@@ -34,6 +36,7 @@ typedef struct {
     bool boolean_value;
     const char *false_label;
     const char *true_label;
+    const char *const *value_labels;
 } speech_setting_info_t;
 
 /* Return false to abort the current utterance. PCM is signed mono 16-bit at
@@ -47,6 +50,10 @@ typedef struct {
     speech_marker_callback_t marker;
     void *context;
 } speech_engine_config_t;
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 speech_engine_t *speech_engine_create(const speech_engine_config_t *config);
 void speech_engine_destroy(speech_engine_t *engine);
@@ -71,4 +78,9 @@ bool speech_engine_get(speech_engine_t *engine, speech_setting_id_t setting,
                        int *value);
 bool speech_engine_supports_annotations(const speech_engine_t *engine);
 
+#ifdef __cplusplus
+}
 #endif
+
+#endif
+

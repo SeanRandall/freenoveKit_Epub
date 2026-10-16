@@ -16,7 +16,7 @@ typedef struct {
 /* Mounts the SD card, joins Wi-Fi, and exposes the complete card through
  * unauthenticated WebDAV.  The caller must ensure the reader has no open card
  * files while this service is running. */
-/* If .evv/WIFI.INI (or legacy EVVZERO/WIFI.INI) contains valid ssid= and
+/* If .rr/WIFI.INI contains valid ssid= and
  * password= entries, those
  * override the optional fallback values supplied by the firmware. */
 esp_err_t transfer_mode_start(const char *fallback_ssid,

@@ -21,10 +21,10 @@
 #define PICO_TA_SYMBOL _binary_en_US_ta_bin
 #define PICO_SG_SYMBOL _binary_en_US_lh0_sg_bin
 #endif
-#define PICO_RESOURCE_DIR "/sdcard/.evv/pico"
+#define PICO_RESOURCE_DIR "/sdcard/.rr/pico"
 #define PICO_TA_PATH PICO_RESOURCE_DIR "/" PICO_TA_FILENAME
 #define PICO_SG_PATH PICO_RESOURCE_DIR "/" PICO_SG_FILENAME
-#define PICO_VOICE_NAME "EVVPico"
+#define PICO_VOICE_NAME "RetroReaderPico"
 
 #define STRINGIFY_INNER(value) #value
 #define STRINGIFY(value) STRINGIFY_INNER(value)
@@ -65,7 +65,7 @@ static bool install_resource(const char *path, const unsigned char *start,
     size_t expected = (size_t)(end - start);
     if (stat(path, &st) == 0 && (size_t)st.st_size == expected)
         return true;
-    (void)mkdir("/sdcard/.evv", 0775);
+    (void)mkdir("/sdcard/.rr", 0775);
     (void)mkdir(PICO_RESOURCE_DIR, 0775);
     FILE *file = fopen(path, "wb");
     if (!file) return false;

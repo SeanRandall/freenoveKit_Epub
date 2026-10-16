@@ -1,0 +1,7 @@
+multi_example/
+cgrm_speak_multi.zip
+cgrm_spk-win32.zip
+/build/
+/dist/
+/build-xtensa-objects/
+__pycache__/

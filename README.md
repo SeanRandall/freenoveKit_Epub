@@ -1,12 +1,13 @@
-# EVV Reader for the Freenove Media Kit
+# RetroReader for the Freenove Media Kit
 
-Experimental Eloquence-sounding EPUB reader firmware for the **Freenove Media Kit
-for ESP32-S3, 1.14-inch model**.
+Experimental speech-first EPUB and text reader firmware for the **Freenove
+Media Kit for ESP32-S3, 1.14-inch model**.
 
 This repository is for both alpha testers and developers. It contains:
 
 - a Windows installer;
-- complete US English, British English and French firmware images;
+- complete firmware images for the speech engines and variants in the dated
+  firmware manifest;
 - an SD-card template and spoken EPUB guide;
 - the complete editable firmware and modified OpenEVV source.
 
@@ -43,18 +44,18 @@ network.
 
 1. Format a micro-SD card as FAT32.
 2. Copy the *contents* of "sd-card" to the root of the card. Include the hidden
-   ".evv" directory.
+   ".rr" directory.
 3. Add EPUB books to the root of the card.
 4. Insert the card before starting the reader.
 
-"EVV Reader Guide.epub" is included as a spoken introduction to the controls.
+"RetroReader Guide.epub" is included as a spoken introduction to the controls.
 
 Network features are optional. To configure them:
 
-1. Rename ".evv/WIFI.INI.example" to ".evv/WIFI.INI" and replace the example
+1. Rename ".rr/WIFI.INI.example" to ".rr/WIFI.INI" and replace the example
    Wi-Fi name and password.
-2. For NVDA Remote, rename ".evv/nvdaremote.ini.example" to
-   ".evv/nvdaremote.ini" and replace the server, port and private channel key.
+2. For NVDA Remote, rename ".rr/nvdaremote.ini.example" to
+   ".rr/nvdaremote.ini" and replace the server, port and private channel key.
 
 No real Wi-Fi credentials or NVDA Remote settings are included in this
 repository or its public firmware images.
@@ -74,13 +75,13 @@ the [newest GitHub release](https://github.com/SeanRandall/freenoveKit_Epub/rele
 
 Download these two files from the "release" directory:
 
-1. "EVV-Reader-Installer.exe"
+1. "RetroReader-Installer.exe"
 2. One complete firmware image for the desired speech engine and voice or
    build variant. The filenames and available variants are documented in
    `release/README.txt`.
 
 Connect the kit via USB, then run
-"EVV-Reader-Installer.exe". Choose the downloaded ".bin" in the standard
+"RetroReader-Installer.exe". Choose the downloaded ".bin" in the standard
 Windows file-open dialog and confirm the detected COM port. Leave the device
 connected until the installer reports that flashing has finished.
 
@@ -99,7 +100,7 @@ Developers can flash any complete release image with Python and esptool. Change
 
 """powershell
 python -m pip install esptool
-python -m esptool --chip esp32s3 --port COM5 write-flash 0x0 release/freenoveKit_Epub-en-GB.bin
+python -m esptool --chip esp32s3 --port COM5 write-flash 0x0 release/RetroReader-openevv-en-GB.bin
 """
 
 ## Build and modify the firmware
@@ -116,7 +117,7 @@ idf.py -p COM5 flash monitor
 
 The reader entry point is "firmware/main/button_speech_main.c", reached through
 the small "paragraph_reader_stable_main.c" wrapper. Network transfer and NVDA
-Remote support are in "transfer_mode.c" and "webdav_transfer_main.c". EPUB
+Remote support are in "transfer_mode.c" and "network_services_main.c". EPUB
 extraction is in "epub_text.c".
 
 "EVV_LANGUAGE" selects the compiled OpenEVV language without forking the
@@ -135,7 +136,8 @@ partition at "0x610000". To build that application separately, always use
 empty fallback credentials so settings are read from the SD card:
 
 """powershell
-idf.py -B build-transfer -D EVV_APP_SOURCE=webdav_transfer_main.c "
+idf.py -B build-transfer -D RR_APP_SOURCE=network_services_main.c "
+  -D RR_SPEECH_ENGINE=openevv -D EVV_LANGUAGE=enus "
   -D TRANSFER_WIFI_SSID= -D TRANSFER_WIFI_PASSWORD= build
 """
 
@@ -146,5 +148,6 @@ DECtalk 4.3 and First Byte ProVoice Reborn are pinned as upstream Git submodules
 alternative-engine builds. The First Byte engine is exposed as Monologue and
 uses the compact XEN11K8 English voice package.
 
-The project firmware is MIT licensed. Vendored OpenEVV files retain their own
-MIT licence and notices.
+The project firmware is MIT licensed. Vendored speech engines retain their own
+licences and notices.
+

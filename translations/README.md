@@ -1,10 +1,10 @@
-# Translating EVV Reader
+# Translating RetroReader
 
-EVV Reader uses the widespread GNU gettext PO format for translation work.
+RetroReader uses the widespread GNU gettext PO format for translation work.
 The ESP firmware does not carry the gettext runtime: completed PO catalogues
 will be converted to compact static C data during a release build.
 
-`evvzero.pot` is the English message template. `fr.po` is the working French
+`retroreader.pot` is the English message template. `fr.po` is the working French
 catalogue. Translators can use Poedit, Weblate or any ordinary PO editor; they
 should translate `msgstr` values and leave `msgid`, `%` format placeholders
 and source-reference comments unchanged.
@@ -20,9 +20,10 @@ erase a translator's work. After refreshing the template, merge new and
 changed messages with GNU gettext or the equivalent command in a PO editor:
 
 ```powershell
-msgmerge --update translations/fr.po translations/evvzero.pot
+msgmerge --update translations/fr.po translations/retroreader.pot
 ```
 
 The extractor targets speech announcement construction, deliberately omitting
 serial diagnostics, filesystem paths and network protocol text that users do
 not hear.
+

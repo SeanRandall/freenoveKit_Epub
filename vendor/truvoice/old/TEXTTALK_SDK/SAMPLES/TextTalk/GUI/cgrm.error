@@ -1,0 +1,9 @@
+State: 1, dxxDev: 3, pid: 1, speechComplete: dx_setdevuio failed
+dev:dxxxB1C1, error 6, errorstr:Parameter errorState: 2, dxxDev: 3, pid: 1, tts_speak: _sr_enbhiprihdlr failed
+dev:dxxxB1C1, error 0, errorstr:No errorState: 2, dxxDev: 3, pid: 1, tts_speak: _sr_enbhiprihdlr failed
+dev:dxxxB1C1, error 0, errorstr:No errorState: 1, dxxDev: 3, pid: 1, speechComplete: dx_setdevuio failed
+dev:dxxxB1C1, error 6, errorstr:Parameter errorState: 2, dxxDev: 3, pid: 1, tts_speak: _sr_enbhiprihdlr failed
+dev:dxxxB1C1, error 0, errorstr:No errorState: 0, dxxDev: 3, pid: -1, tts_open: dx_getctinfo failed
+dev:dxxxB1, error 6, errorstr:Parameter error
+State: 2, dxxDev: 3, pid: 2, tts_speak: _sr_enbhiprihdlr failed
+dev:dxxxB1C1, error 0, errorstr:No error

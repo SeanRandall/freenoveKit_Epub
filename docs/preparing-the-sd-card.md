@@ -13,13 +13,13 @@
 
 1. Download and extract the SD-card template.
 2. Copy the **contents** of the extracted "sd-card" folder to the root of the card. Do not copy the containing folder itself.
-3. Keep the ".evv" directory. It stores configuration, book indexes, reading state and recordings.
+3. Keep the ".rr" directory. It stores configuration, book indexes, reading state and recordings.
 4. Copy books and audio into any folder structure you prefer. Retroreader browses the card directly and does not require a special library folder.
 5. Eject the card safely before removing it from the computer.
 
 ## Configure Wi-Fi
 
-Inside ".evv", rename "WIFI.INI.example" to "WIFI.INI". Edit it as plain text:
+Inside ".rr", rename "WIFI.INI.example" to "WIFI.INI". Edit it as plain text:
 
 ```ini
 ssid=YOUR_WIFI_NETWORK
@@ -40,13 +40,14 @@ The template contains commented examples. Rename an example only when you intend
 
 ## Updating or replacing a card
 
-Keep a backup of the entire card, especially ".evv/recordings" and any books that are not stored elsewhere. Cached book data can be regenerated, but recordings and personal files cannot.
+Keep a backup of the entire card, especially ".rr/recordings" and any books that are not stored elsewhere. Cached book data can be regenerated, but recordings and personal files cannot.
 
 ## Troubleshooting checklist
 
 - Confirm the card is FAT32 rather than exFAT or NTFS.
-- Confirm ".evv" is at the card root.
-- On Windows, enable **Hidden items** if ".evv" is not visible.
+- Confirm ".rr" is at the card root.
+- On Windows, enable **Hidden items** if ".rr" is not visible.
 - Check that configuration files end in ".ini", not ".ini.txt".
 - Use plain UTF-8 text and do not add quotation marks around Wi-Fi values.
+
 

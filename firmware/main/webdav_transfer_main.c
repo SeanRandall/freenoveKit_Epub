@@ -49,8 +49,8 @@ void evvRunStaticInitialisers(void);
 void evv_port_start(void);
 
 #define FRAME_SAMPLES 2048
-#define BOOT_REQUEST_READER UINT32_C(0x45565652)
-#define BOOT_REQUEST_TRANSFER UINT32_C(0x45565654)
+#define BOOT_REQUEST_READER UINT32_C(0x52524452)
+#define BOOT_REQUEST_TRANSFER UINT32_C(0x52524E54)
 #define VOICE_SPEED 6
 #define VOICE_VOLUME 7
 #define ENGINE_VOLUME_MAX 80
@@ -315,7 +315,8 @@ static void load_voice_preferences(OldInst *voice)
 static bool read_remote_config(char *host, size_t host_size, int *port,
                                char *key, size_t key_size)
 {
-    FILE *file = fopen("/sdcard/.evv/nvdaremote.ini", "rb");
+    FILE *file = fopen("/sdcard/.rr/nvdaremote.ini", "rb");
+    if (!file) file = fopen("/sdcard/.rr/NVDAREMOTE.INI", "rb");
     if (!file) return false;
     char line[384];
     while (fgets(line, sizeof(line), file)) {

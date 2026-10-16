@@ -55,8 +55,8 @@ The current ESP-IDF toolchain is used through `idf.py`. A typical build is:
 ```powershell
 . C:\Users\sean\esp\esp-idf-v5.5\export.ps1
 idf.py -C firmware -B build-myengine `
-  -D EVV_APP_SOURCE=paragraph_reader_stable_main.c `
-  -D EVV_SPEECH_ENGINE=myengine build
+  -D RR_APP_SOURCE=paragraph_reader_stable_main.c `
+  -D RR_SPEECH_ENGINE=myengine build
 ```
 
 ## Required adapter API
@@ -151,7 +151,7 @@ expects another encoding. Do not silently reinterpret UTF-8 bytes as an
 8-bit legacy code page.
 
 Before reaching the engine, reading text is processed by the optional user
-file `/sdcard/.evv/substitutions.tsv`. This reader-level substitution feature
+file `/sdcard/.rr/substitutions.tsv`. This reader-level substitution feature
 is independent of an engine's built-in pronunciation dictionary.
 
 Return `true` from `speech_engine_supports_annotations()` only when replacement
@@ -170,7 +170,7 @@ handling.
 Add a new branch to `firmware/main/CMakeLists.txt`:
 
 ```cmake
-elseif(EVV_SPEECH_ENGINE STREQUAL "myengine")
+elseif(RR_SPEECH_ENGINE STREQUAL "myengine")
     set(MYENGINE_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../vendor/myengine")
     set(MYENGINE_SOURCES
         ${MYENGINE_ROOT}/src/engine.c
@@ -192,10 +192,10 @@ sources.
 If the engine needs voice or language resources, either:
 
 1. compile constant data directly into flash;
-2. use `APP_EMBED_FILES` and copy the resource to `.evv` on first boot; or
+2. use `APP_EMBED_FILES` and copy the resource to `.rr` on first boot; or
 3. document an SD resource package and fail with a clear error when absent.
 
-Pico embeds its linguistic resources, installs them under `.evv/pico`, and
+Pico embeds its linguistic resources, installs them under `.rr/pico`, and
 loads them from there because its native API expects files. DECtalk 4.3 uses
 the same pattern for its dictionary. Monologue embeds a packed voice image.
 
@@ -329,4 +329,5 @@ An open-source wrapper does not automatically grant rights to redistribute a
 voice or dictionary. Keep uncertain material outside tracked public paths,
 exclude private build trees and artefacts locally, and review a firmware image
 for embedded proprietary data before release.
+
 

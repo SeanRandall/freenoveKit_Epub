@@ -1,0 +1,117 @@
+PHONEMES:
+------------------------------------------------------------------------------------------
+
+phonemes start with ampersand (&) unless in phoneme mode
+
+truvoice -> arpa/dectalk-like
+
+A		ey
+a		ae
+B		b
+b		uw
+C		ch
+c		uh_r		// tour
+D		d
+d		hv			// voiced HH
+E		iy
+e		eh
+F		f
+f		aw
+G		g
+g		ao_r		// four
+H		hh
+I		ay
+i		ih
+J		jh
+j		lx			// postvocalic light L
+K		k
+k		eh_r		// hair
+L		l
+l		el			// syllabic L
+M		m
+N		n
+n		en			// syllabic N
+O		ow
+o		aa
+P		p
+q		tq			// glottalized T (like in "button")
+R		r
+r		aa_r		// hard
+S		s
+s		sh
+T		t
+t		dx			// alveolar flap (like in "butter")
+U		y_uw		// "huge" and "donahue"
+u		uh
+V		v
+v		ah
+W		w
+w		ao
+X		th
+x		dh
+Y		y
+y		oy
+Z		z
+z		zh
+~		ng
+3		er			// could be "axr" too, but I don't think TruVoice can differentiate unstressed/stressed "er"
+4		ih_r		// "hear"
+5		ay_r		// "fire"
+@		ax			// unstressed schwa
+|		ix			// unstressed fronted schwa
+1		'			// primary stress
+2		"			// secondary stress
+
+
+
+FOUND ESCAPE SEQUENCE COMMANDS:
+------------------------------------------------------------------------------------------
+
+\x1B[ - escape sequence start (always starts with escape character \x1B and end with [ )
+{d}   - number
+
+
+\x1B[{d}V		# voice
+
+\x1B[{d}a		# amplitude (volume. higher value is lower)
+	range: 0 -> 16
+
+\x1B[{d}r		# speech rate
+	range: 50 -> 250
+
+\x1B[{d}p		# pitch
+	range: 50 -> 400 hz
+
+\x1B[{d}X		# context mode (for reading special text like email messages)
+
+\x1B[{d}c		# voice/character mode (0 - normal, 1 - whisper, 2 - monotone)
+
+\x1B[{d}I		# text/phoneme mode (0 - text, 1 - phoneme)
+
+\x1B[{d}f		# fast/skim read mode. this skips some words to speed up reading.
+
+		0    = speaks all text ('this is a test. how do I sound?')
+		1    = speaks just nouns? ('test... sound?')
+		2    = speaks just the last noun? ('sound?')
+		3... = no speech for the example sentence.
+
+\x1B[{d}P		# speaks out words individually without regular prosody.
+
+		0    = word read
+		1    = regular prosody
+
+\x1B[{d}s		# initiates a silence/pause with number as duration in milliseconds
+
+\x1B[{d}t does something. It tests phonemes. only used by the developers for debugging the synthesizer :D
+
+
+UNKNOWNS TO INVESTIGATE FURTHER:
+------------------------------------------------------------------------------------------
+
+When \x1B[5A is used, it speaks really fast.
+
+\x1B[{d}g does something. It first produces a schwa sound then speaks text. Duration is based on the given number?
+
+\x1B[{d}v does something. it messes with the speech rate? low number is slow, and high number (max might be 20) is fast
+
+\x1B[{d}x does something. no speech comes out tho (0 - 255 is the number range)

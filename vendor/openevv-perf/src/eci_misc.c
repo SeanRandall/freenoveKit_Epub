@@ -99,6 +99,8 @@ int32_t STDCALL eo_getParam(OldInst *h, int32_t which)
 
     if (!inst)
         return v;
+    if (which == ECI_OLD_PAUSES)
+        return inst->pauses;
     if (which >= 0x11)
         return v;
     if (which == 0x0b)
@@ -120,10 +122,14 @@ int32_t STDCALL eo_getParam(OldInst *h, int32_t which)
 /* The same, but of the defaults a new instance would start from. A language
    of nought means none has been chosen, and the answer is the one built
    in. */
+int32_t g_DefaultPauses = PAUSES_DEFAULT;
+
 int32_t STDCALL es_getDefaultParam(int32_t which)
 {
     int32_t v = -1;
 
+    if (which == ECI_OLD_PAUSES)
+        return g_DefaultPauses;
     if (which < 0 || which >= ENV_WORDS)
         return v;
 
@@ -140,6 +146,14 @@ int32_t STDCALL es_setDefaultParam(int32_t which, int32_t value)
     int32_t v = value;
     int32_t old = -1;
     int accepted;
+
+    if (which == ECI_OLD_PAUSES) {
+        if (value < PAUSES_NONE || value > PAUSES_ALWAYS)
+            return -1;
+        old = g_DefaultPauses;
+        g_DefaultPauses = value;
+        return old;
+    }
 
     if (which < 0 || which >= ENV_WORDS)
         return -1;
@@ -280,6 +294,8 @@ int STDCALL es_reset(OldInst *h)
     inst = h;
     if (!inst)
         return 0;
+
+    inst->pauses = g_DefaultPauses;
 
     if (setECIerror(api_reset(OI_NEW(inst),
                               g_DefaultEnvironment[ENV_LANGUAGE]), inst)) {
