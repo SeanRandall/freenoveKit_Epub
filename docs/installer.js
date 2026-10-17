@@ -4,26 +4,55 @@ const progressNode = document.querySelector("#progress");
 const installButton = document.querySelector("#install");
 const deviceNode = document.querySelector("#device");
 const optionsNode = document.querySelector("#firmware-options");
-const downloadNode = document.querySelector("#firmware-download");
+const sampleStatusNode = document.querySelector("#sample-status");
 
 let manifest;
 let variants = new Map();
+let sampleAudio;
+let sampleLink;
 
 const filesFor = variant => [
   [`firmware/${variant.image}`, 0x0000],
 ];
 
-function updateDownload() {
-  const selected = document.querySelector('input[name="firmware"]:checked');
-  const variant = selected && variants.get(selected.value);
-  if (!variant) {
-    downloadNode.hidden = true;
+function stopSample(announce = false) {
+  if (sampleAudio) {
+    sampleAudio.pause();
+    sampleAudio.currentTime = 0;
+  }
+  if (sampleLink) sampleLink.textContent = "Listen";
+  sampleAudio = undefined;
+  sampleLink = undefined;
+  if (announce) sampleStatusNode.textContent = "Voice sample stopped.";
+}
+
+function toggleSample(event, choice, link) {
+  event.preventDefault();
+  if (sampleLink === link && sampleAudio && !sampleAudio.paused) {
+    stopSample(true);
     return;
   }
-  downloadNode.href = `firmware/${variant.image}`;
-  downloadNode.download = variant.image;
-  downloadNode.textContent = `Download ${variant.label} complete firmware image`;
-  downloadNode.hidden = false;
+  stopSample();
+  sampleAudio = new Audio(choice.sample);
+  sampleLink = link;
+  const audio = sampleAudio;
+  link.textContent = "Stop sample";
+  sampleStatusNode.textContent = `Playing ${choice.engine}, ${choice.label}.`;
+  audio.addEventListener("ended", () => {
+    if (sampleAudio !== audio) return;
+    stopSample();
+    sampleStatusNode.textContent = "Voice sample finished.";
+  });
+  audio.addEventListener("error", () => {
+    if (sampleAudio !== audio) return;
+    stopSample();
+    sampleStatusNode.textContent = "The voice sample could not be played.";
+  });
+  audio.play().catch(() => {
+    if (sampleAudio !== audio) return;
+    stopSample();
+    sampleStatusNode.textContent = "The voice sample could not be played.";
+  });
 }
 
 function renderVariants(data) {
@@ -44,20 +73,28 @@ function renderVariants(data) {
     legend.textContent = `${engine} voice variant`;
     fieldset.append(legend);
     for (const choice of choices) {
+      const option = document.createElement("div");
+      option.className = "firmware-choice";
       const label = document.createElement("label");
       const radio = document.createElement("input");
       radio.type = "radio";
       radio.name = "firmware";
       radio.value = choice.id;
       radio.checked = Boolean(choice.default);
-      radio.addEventListener("change", updateDownload);
       label.append(radio, ` ${choice.label}`);
-      fieldset.append(label);
+      option.append(label);
+      if (choice.sample) {
+        const listen = document.createElement("a");
+        listen.href = choice.sample;
+        listen.textContent = "Listen";
+        listen.addEventListener("click", event => toggleSample(event, choice, listen));
+        option.append(listen);
+      }
+      fieldset.append(option);
     }
     details.append(summary, fieldset);
     optionsNode.append(details);
   }
-  updateDownload();
 }
 
 installButton.disabled = true;
