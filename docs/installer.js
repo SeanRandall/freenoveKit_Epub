@@ -11,6 +11,13 @@ let variants = new Map();
 let sampleAudio;
 let sampleLink;
 
+function updateReadyStatus() {
+  const selected = document.querySelector('input[name="firmware"]:checked');
+  const choice = selected && variants.get(selected.value);
+  if (!manifest || !choice) return;
+  statusNode.textContent = `Ready to install ${manifest.version}, ${choice.engine} ${choice.label}.`;
+}
+
 const filesFor = variant => [
   [`firmware/${variant.image}`, 0x0000],
 ];
@@ -81,6 +88,7 @@ function renderVariants(data) {
       radio.name = "firmware";
       radio.value = choice.id;
       radio.checked = Boolean(choice.default);
+      radio.addEventListener("change", updateReadyStatus);
       label.append(radio, ` ${choice.label}`);
       option.append(label);
       if (choice.sample) {
@@ -106,7 +114,7 @@ fetch("firmware-manifest.json", { cache: "no-cache" })
   .then(data => {
     manifest = data;
     renderVariants(data);
-    statusNode.textContent = `Ready to install ${data.version}.`;
+    updateReadyStatus();
     installButton.disabled = false;
   })
   .catch(error => {
