@@ -4,7 +4,7 @@ set(RR_APP_SOURCE "paragraph_reader_stable_main.c" CACHE STRING
 set(EVV_LANGUAGE "enus" CACHE STRING
     "OpenEVV language module to compile (for example enus, engb or frfr)")
 set(RR_SPEECH_ENGINE "openevv" CACHE STRING
-    "Speech backend to compile (openevv, pico, openbst, dectalk, dectalk43, monologue, doubletalk or truvoice)")
+    "Speech backend to compile (openevv, pico, openbst, dectalk, dectalk43, monologue, doubletalk, truvoice or apollo2)")
 set(RR_PICO_VOICE "en-US" CACHE STRING
     "Pico voice variant (en-US, en-GB, de-DE, es-ES, fr-FR or it-IT)")
 set(RR_OPENBST_BUILD "1998ENG" CACHE STRING
@@ -312,6 +312,22 @@ elseif(RR_SPEECH_ENGINE STREQUAL "truvoice")
         "${TRUVOICE_BE}/port"
         "${TRUVOICE_FE}"
         "${TRUVOICE_GEN}")
+elseif(RR_SPEECH_ENGINE STREQUAL "apollo2")
+    set(APOLLO2_ROOT
+        "${CMAKE_CURRENT_LIST_DIR}/../../vendor/dolphin-apollo2/src")
+    file(GLOB APOLLO2_BOARD_SOURCES "${APOLLO2_ROOT}/board/*.c")
+    file(GLOB APOLLO2_ENGINE_SOURCES "${APOLLO2_ROOT}/engine/*.c")
+    file(GLOB APOLLO2_FIRMWARE_SOURCES "${APOLLO2_ROOT}/firmware/*.c")
+    file(GLOB APOLLO2_DATA_SOURCES "${APOLLO2_ROOT}/firmware/data/*.c")
+    file(GLOB APOLLO2_SYNTH_SOURCES "${APOLLO2_ROOT}/synth/*.c")
+    list(APPEND APP_SOURCES
+        "speech_engine_apollo2.c"
+        ${APOLLO2_BOARD_SOURCES}
+        ${APOLLO2_ENGINE_SOURCES}
+        ${APOLLO2_FIRMWARE_SOURCES}
+        ${APOLLO2_DATA_SOURCES}
+        ${APOLLO2_SYNTH_SOURCES})
+    set(SPEECH_INCLUDE_DIRS "${APOLLO2_ROOT}")
 else()
     message(FATAL_ERROR "Unknown speech backend '${RR_SPEECH_ENGINE}'")
 endif()
@@ -385,6 +401,11 @@ if(RR_SPEECH_ENGINE STREQUAL "truvoice")
     target_compile_options(${COMPONENT_LIB} PRIVATE
         -fwrapv -Wno-incompatible-pointer-types
         -Wno-stringop-overflow -Wno-stringop-truncation)
+endif()
+
+if(RR_SPEECH_ENGINE STREQUAL "apollo2")
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE
+        RR_ENGINE_SAMPLE_RATE=10000)
 endif()
 
 if(RR_SPEECH_ENGINE STREQUAL "doubletalk")

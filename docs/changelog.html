@@ -13,6 +13,19 @@
 <h1>Retroreader changelog</h1>
 <p>Retroreader remains alpha software. Releases may change settings, storage
 layouts and behaviour without preserving compatibility with earlier builds.</p>
+<h2>2026.10.17 — pre-release</h2>
+<ul>
+<li>Add the British Dolphin Apollo II speech synthesizer, reconstructed from the
+  original hardware firmware and rendered natively on the ESP32-S3.</li>
+<li>Provide Apollo controls for rate, voice volume, pitch, its male and non-male
+  speaker tables, and expression. The original Apollo deliberately reduces
+  expression at faster rates.</li>
+<li>Stream Apollo speech as it is synthesized for responsive, interruptible
+  menus and reading, while yielding regularly to the reader interface.</li>
+<li>Fix a crash when moving through engine-specific voice settings.</li>
+<li>Add Apollo to the web installer, downloadable firmware, voice samples and
+  source-provenance information.</li>
+</ul>
 <h2>2026.10.16 — pre-release</h2>
 <p>This is the first date-numbered Retroreader release and a substantial change
 to how speech engines and firmware images are packaged.</p>

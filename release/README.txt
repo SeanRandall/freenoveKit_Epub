@@ -31,6 +31,9 @@ TruVoice image:
 DoubleTalk Hybrid image (experimental):
   RetroReader-doubletalk-hybrid-en-US.bin - US English voice and interface
 
+Dolphin Apollo II image:
+  RetroReader-apollo2-en-GB.bin - British English voice and interface
+
 All variants currently use the English interface. Book text is spoken by the
 selected engine and voice or build.
 

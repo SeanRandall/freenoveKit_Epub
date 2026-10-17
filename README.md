@@ -148,7 +148,9 @@ DECtalk 4.3 and First Byte ProVoice Reborn are pinned as upstream Git submodules
 alternative-engine builds. The First Byte engine is exposed as Monologue and
 uses the compact XEN11K8 English voice package. The experimental DoubleTalk
 Hybrid build combines the original DoubleTalk PC firmware front end with a
-native ESP32 acoustic renderer.
+native ESP32 acoustic renderer. Dolphin Apollo II uses rommix0's native C
+reconstruction of the British Apollo II firmware and its newly written 10 kHz
+formant renderer.
 
 The project firmware is MIT licensed. Vendored speech engines retain their own
 licences and notices.

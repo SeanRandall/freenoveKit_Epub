@@ -3188,10 +3188,12 @@ static void reader_format_speech_setting(void)
         return;
     }
     int value = reader_speech_values[info.id];
+    const char *value_label = NULL;
     if (info.value_labels && value >= info.minimum && value <= info.maximum)
+        value_label = info.value_labels[value - info.minimum];
+    if (value_label)
         snprintf(reader_announcement, sizeof(reader_announcement), "%s. %s",
-                 info.name,
-                 info.value_labels[value - info.minimum]);
+                 info.name, value_label);
     else if (info.boolean_value)
         snprintf(reader_announcement, sizeof(reader_announcement), "%s. %s",
                  info.name, value
