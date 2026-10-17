@@ -4,7 +4,7 @@ set(RR_APP_SOURCE "paragraph_reader_stable_main.c" CACHE STRING
 set(EVV_LANGUAGE "enus" CACHE STRING
     "OpenEVV language module to compile (for example enus, engb or frfr)")
 set(RR_SPEECH_ENGINE "openevv" CACHE STRING
-    "Speech backend to compile (openevv, pico, openbst, dectalk, dectalk43, monologue, doubletalk, truvoice or apollo2)")
+    "Speech backend to compile (openevv, pico, openbst, dectalk, dectalk43, monologue, doubletalk, truvoice, apollo2, prose1983 or prose1988)")
 set(RR_PICO_VOICE "en-US" CACHE STRING
     "Pico voice variant (en-US, en-GB, de-DE, es-ES, fr-FR or it-IT)")
 set(RR_OPENBST_BUILD "1998ENG" CACHE STRING
@@ -328,6 +328,43 @@ elseif(RR_SPEECH_ENGINE STREQUAL "apollo2")
         ${APOLLO2_DATA_SOURCES}
         ${APOLLO2_SYNTH_SOURCES})
     set(SPEECH_INCLUDE_DIRS "${APOLLO2_ROOT}")
+elseif(RR_SPEECH_ENGINE MATCHES "^prose(1983|1988)$")
+    set(PROSE_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../vendor/prose2000")
+    file(GLOB PROSE_COMMON_SOURCES "${PROSE_ROOT}/common/*.c")
+    file(GLOB PROSE_DATA_SOURCES "${PROSE_ROOT}/data/*.c")
+    file(GLOB PROSE_DSP_SOURCES "${PROSE_ROOT}/dsp/*.c")
+    file(GLOB PROSE_FRAME_SOURCES "${PROSE_ROOT}/frame/*.c")
+    file(GLOB PROSE_PARAMGEN_SOURCES "${PROSE_ROOT}/paramgen/*.c")
+    file(GLOB PROSE_PROSODY_SOURCES "${PROSE_ROOT}/prosody/*.c")
+    file(GLOB PROSE_LEXICAL_SOURCES "${PROSE_ROOT}/lexical/*.c")
+    file(GLOB PROSE_INPUT_SOURCES "${PROSE_ROOT}/input/*.c")
+    file(GLOB PROSE_TEXTRULE_SOURCES "${PROSE_ROOT}/textrules/*.c")
+    file(GLOB PROSE_V1_SOURCES "${PROSE_ROOT}/v1/*.c")
+    list(APPEND APP_SOURCES
+        "speech_engine_prose2000.c"
+        "${PROSE_ROOT}/dll/prose_api.c"
+        "${PROSE_ROOT}/dll/prose_engine.c"
+        "${PROSE_ROOT}/dll/prose_eng3.c"
+        "${PROSE_ROOT}/dll/prose_eng1.c"
+        "${PROSE_ROOT}/dll/prose_params.c"
+        "${PROSE_ROOT}/dll/prose_sys_esp.c"
+        ${PROSE_COMMON_SOURCES}
+        ${PROSE_DATA_SOURCES}
+        ${PROSE_DSP_SOURCES}
+        ${PROSE_FRAME_SOURCES}
+        ${PROSE_PARAMGEN_SOURCES}
+        ${PROSE_PROSODY_SOURCES}
+        ${PROSE_LEXICAL_SOURCES}
+        ${PROSE_INPUT_SOURCES}
+        ${PROSE_TEXTRULE_SOURCES}
+        ${PROSE_V1_SOURCES})
+    set(SPEECH_INCLUDE_DIRS
+        "${PROSE_ROOT}/include" "${PROSE_ROOT}/dll"
+        "${PROSE_ROOT}/common" "${PROSE_ROOT}/data"
+        "${PROSE_ROOT}/dsp" "${PROSE_ROOT}/frame"
+        "${PROSE_ROOT}/paramgen" "${PROSE_ROOT}/prosody"
+        "${PROSE_ROOT}/lexical" "${PROSE_ROOT}/input"
+        "${PROSE_ROOT}/textrules" "${PROSE_ROOT}/v1")
 else()
     message(FATAL_ERROR "Unknown speech backend '${RR_SPEECH_ENGINE}'")
 endif()
@@ -406,6 +443,17 @@ endif()
 if(RR_SPEECH_ENGINE STREQUAL "apollo2")
     target_compile_definitions(${COMPONENT_LIB} PRIVATE
         RR_ENGINE_SAMPLE_RATE=10000)
+endif()
+
+if(RR_SPEECH_ENGINE MATCHES "^prose(1983|1988)$")
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE
+        RR_ENGINE_SAMPLE_RATE=10000
+        PROSE_STATIC=1)
+    if(RR_SPEECH_ENGINE STREQUAL "prose1983")
+        target_compile_definitions(${COMPONENT_LIB} PRIVATE RR_PROSE_VERSION=11)
+    else()
+        target_compile_definitions(${COMPONENT_LIB} PRIVATE RR_PROSE_VERSION=341)
+    endif()
 endif()
 
 if(RR_SPEECH_ENGINE STREQUAL "doubletalk")

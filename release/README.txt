@@ -34,6 +34,9 @@ DoubleTalk Hybrid image (experimental):
 Dolphin Apollo II image:
   RetroReader-apollo2-en-GB.bin - British English voice and interface
 
+Speech Plus Prose 2000 image:
+  RetroReader-prose2000-1988-en-US.bin - 1988 US English voice and interface
+
 All variants currently use the English interface. Book text is spoken by the
 selected engine and voice or build.
 

@@ -150,7 +150,8 @@ uses the compact XEN11K8 English voice package. The experimental DoubleTalk
 Hybrid build combines the original DoubleTalk PC firmware front end with a
 native ESP32 acoustic renderer. Dolphin Apollo II uses rommix0's native C
 reconstruction of the British Apollo II firmware and its newly written 10 kHz
-formant renderer.
+formant renderer. Speech Plus Prose 2000 uses the portable reconstruction of
+the 1988 v3.4.1 hardware firmware and its formant DSP.
 
 The project firmware is MIT licensed. Vendored speech engines retain their own
 licences and notices.
