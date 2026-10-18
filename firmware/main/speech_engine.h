@@ -54,6 +54,14 @@ typedef struct {
     void *context;
 } speech_engine_config_t;
 
+/* Playback-policy hints supplied by an engine adapter.  These are advisory:
+   the reader owns buffering and I2S, while the adapter describes how quickly
+   its engine can safely begin feeding them. */
+typedef struct {
+    uint16_t initial_buffer_ms;
+    uint16_t navigation_buffer_ms;
+} speech_engine_playback_hints_t;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -66,6 +74,8 @@ const char *speech_engine_name(const speech_engine_t *engine);
    firmware variants. */
 const char *speech_engine_storage_id(void);
 unsigned speech_engine_sample_rate(const speech_engine_t *engine);
+void speech_engine_playback_hints(const speech_engine_t *engine,
+                                  speech_engine_playback_hints_t *hints);
 
 bool speech_engine_synthesize(speech_engine_t *engine, const char *text);
 bool speech_engine_insert_marker(speech_engine_t *engine, uint32_t marker);

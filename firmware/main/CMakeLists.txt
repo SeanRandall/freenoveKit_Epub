@@ -4,7 +4,7 @@ set(RR_APP_SOURCE "paragraph_reader_stable_main.c" CACHE STRING
 set(EVV_LANGUAGE "enus" CACHE STRING
     "OpenEVV language module to compile (for example enus, engb or frfr)")
 set(RR_SPEECH_ENGINE "openevv" CACHE STRING
-    "Speech backend to compile (openevv, pico, openbst, dectalk, dectalk43, monologue, doubletalk, truvoice, apollo2, prose1983 or prose1988)")
+    "Speech backend to compile (openevv, pico, openbst, dectalk, dectalk43, monologue, doubletalk, truvoice, apollo2, prose1983, prose1988 or rsynth)")
 set(RR_PICO_VOICE "en-US" CACHE STRING
     "Pico voice variant (en-US, en-GB, de-DE, es-ES, fr-FR or it-IT)")
 set(RR_OPENBST_BUILD "1998ENG" CACHE STRING
@@ -64,6 +64,7 @@ set(APP_SOURCES
     "transfer_mode.c"
     "transfer_web.c"
     "epub_text.c"
+    "speech_engine_common.c"
     )
 
 if(RR_SPEECH_ENGINE STREQUAL "openevv")
@@ -328,6 +329,26 @@ elseif(RR_SPEECH_ENGINE STREQUAL "apollo2")
         ${APOLLO2_DATA_SOURCES}
         ${APOLLO2_SYNTH_SOURCES})
     set(SPEECH_INCLUDE_DIRS "${APOLLO2_ROOT}")
+elseif(RR_SPEECH_ENGINE STREQUAL "rsynth")
+    set(RSYNTH_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../vendor/rsynth")
+    set(RSYNTH_SOURCES
+        "${RSYNTH_ROOT}/opsynth.c"
+        "${RSYNTH_ROOT}/elements.c"
+        "${RSYNTH_ROOT}/holmes.c"
+        "${RSYNTH_ROOT}/trie.c"
+        "${RSYNTH_ROOT}/phtoelm.c"
+        "${RSYNTH_ROOT}/darray.c"
+        "${RSYNTH_ROOT}/say.c"
+        "${RSYNTH_ROOT}/phones.c"
+        "${RSYNTH_ROOT}/text.c"
+        "${RSYNTH_ROOT}/english.c"
+        "${RSYNTH_ROOT}/charset.c"
+        "${RSYNTH_ROOT}/port/rsynth_api.c"
+        "${RSYNTH_ROOT}/port/frontend.c"
+        "${RSYNTH_ROOT}/port/dict_none.c")
+    list(APPEND APP_SOURCES "speech_engine_rsynth.c" ${RSYNTH_SOURCES})
+    set(SPEECH_INCLUDE_DIRS
+        "${RSYNTH_ROOT}" "${RSYNTH_ROOT}/port" "${RSYNTH_ROOT}/include")
 elseif(RR_SPEECH_ENGINE MATCHES "^prose(1983|1988)$")
     set(PROSE_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../vendor/prose2000")
     file(GLOB PROSE_COMMON_SOURCES "${PROSE_ROOT}/common/*.c")
@@ -443,6 +464,13 @@ endif()
 if(RR_SPEECH_ENGINE STREQUAL "apollo2")
     target_compile_definitions(${COMPONENT_LIB} PRIVATE
         RR_ENGINE_SAMPLE_RATE=10000)
+endif()
+
+if(RR_SPEECH_ENGINE STREQUAL "rsynth")
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE
+        RR_ENGINE_SAMPLE_RATE=16000 RSYNTH_STATIC=1)
+    target_compile_options(${COMPONENT_LIB} PRIVATE
+        -Wno-pointer-sign -Wno-error=pointer-sign -Wno-error=char-subscripts)
 endif()
 
 if(RR_SPEECH_ENGINE MATCHES "^prose(1983|1988)$")

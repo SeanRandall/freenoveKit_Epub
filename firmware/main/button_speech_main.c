@@ -49,11 +49,9 @@
 #define SAMPLE_RATE RR_ENGINE_SAMPLE_RATE
 #define FRAME_SAMPLES 2048
 #define PAUSE_REWIND_MS 500
-#define ROLLING_START_MS 4000
-#define NAVIGATION_START_MS 1200
 #define OPENING_BOOK_SOUND_MS 500
 #define READER_PCM_BYTES ((7u * 1024u * 1024u) / 2u)
-#define READER_RETAIN_SAMPLES (SAMPLE_RATE * 8)
+#define READER_RETAIN_MAX_SAMPLES (SAMPLE_RATE * 60)
 #define READER_RING_LOW_SAMPLES (SAMPLE_RATE * 30)
 #define READER_RING_HIGH_SAMPLES (SAMPLE_RATE * 60)
 #define READER_SYNTH_RESERVE_SAMPLES (SAMPLE_RATE * 10)
@@ -103,6 +101,22 @@ static int16_t *reader_pcm;
 static volatile size_t reader_pcm_samples;
 static volatile uint64_t reader_total_pcm_generated;
 static size_t reader_pcm_capacity;
+
+/* Keep as much already-played audio as this engine's sample rate permits,
+   without taking space needed by the sixty-second forward buffer and the
+   next synthesis request.  Low-rate engines such as DoubleTalk therefore
+   retain a full minute for sentence rewind; higher-rate engines degrade
+   gracefully instead of exhausting the circular buffer. */
+static size_t reader_retain_samples(void)
+{
+    const size_t forward_need = READER_RING_HIGH_SAMPLES
+        + READER_SYNTH_RESERVE_SAMPLES + FRAME_SAMPLES;
+    if (reader_pcm_capacity <= forward_need)
+        return 0;
+    size_t available = reader_pcm_capacity - forward_need;
+    return available < READER_RETAIN_MAX_SAMPLES
+        ? available : READER_RETAIN_MAX_SAMPLES;
+}
 static SemaphoreHandle_t reader_pcm_mutex;
 static size_t reader_discarded_text_offset;
 static bool reader_ring_fill_active;
@@ -524,8 +538,9 @@ static bool on_speech_pcm(const int16_t *pcm, size_t count, void *context)
         if (reader_render_abort || active_generation != requested_generation)
             return false;
         xSemaphoreTake(reader_pcm_mutex, portMAX_DELAY);
-        size_t retain_floor = reader_play_offset > READER_RETAIN_SAMPLES
-            ? reader_play_offset - READER_RETAIN_SAMPLES : 0;
+        size_t retain_samples = reader_retain_samples();
+        size_t retain_floor = reader_play_offset > retain_samples
+            ? reader_play_offset - retain_samples : 0;
         size_t used = reader_pcm_samples - retain_floor;
         size_t room = used < reader_pcm_capacity
             ? reader_pcm_capacity - used : 0;
@@ -1042,8 +1057,9 @@ static bool reader_start_next_text_chunk(speech_engine_t *instance)
     for (;;) {
         if (reader_render_abort || reader_render_stop_requested)
             return false;
-        size_t retain_floor = reader_play_offset > READER_RETAIN_SAMPLES
-            ? reader_play_offset - READER_RETAIN_SAMPLES : 0;
+        size_t retain_samples = reader_retain_samples();
+        size_t retain_floor = reader_play_offset > retain_samples
+            ? reader_play_offset - retain_samples : 0;
         size_t used = reader_pcm_samples - retain_floor;
         size_t free_samples = used < reader_pcm_capacity
             ? reader_pcm_capacity - used : 0;
@@ -1320,8 +1336,11 @@ static bool reader_speak_buffered(speech_engine_t *instance, const char *text,
 static bool reader_load_book(speech_engine_t *instance, uint32_t generation)
 {
     int64_t started_us = esp_timer_get_time();
+    speech_engine_playback_hints_t playback_hints;
+    speech_engine_playback_hints(instance, &playback_hints);
     unsigned start_target_ms = reader_quick_start
-        ? NAVIGATION_START_MS : ROLLING_START_MS;
+        ? playback_hints.navigation_buffer_ms
+        : playback_hints.initial_buffer_ms;
     reader_pcm_samples = 0;
     /* Absolute ring counters belong to the discarded cache. Reset the read
        counter at the same time as the write counter; retaining an offset from
@@ -6055,6 +6074,20 @@ static void reader_engine_task(void *arg)
                        (unsigned long)requested_generation);
             continue;
         }
+        /* Any transition away from continuous book playback owns a freshly
+           created, silent I2S channel.  Do this before profile changes,
+           renderer waits, tones or speech so no UI operation can expose DMA
+           descriptors left by the book stream. */
+        bool output_prepared = false;
+        if (event.kind != AUDIO_PARAGRAPH
+            && event.kind != AUDIO_MEDIA_PLAY) {
+            if (!reader_discard_dma_audio()) {
+                ESP_LOGE(TAG, "could not reset audio output for UI event");
+                reader_ui_busy = false;
+                continue;
+            }
+            output_prepared = true;
+        }
         static uint32_t applied_speech_revision;
         if (applied_speech_revision != reader_speech_revision) {
             if (!reader_apply_speech_profile(instance)) {
@@ -6078,7 +6111,7 @@ static void reader_engine_task(void *arg)
         if (event.kind != AUDIO_PARAGRAPH && reader_ui_tone_pending) {
             reader_ui_tone_pending = false;
             if (reader_interface_sounds) {
-                if (!reader_discard_dma_audio()) {
+                if (!output_prepared && !reader_discard_dma_audio()) {
                     ESP_LOGE(TAG, "could not reset audio output for UI tone");
                     continue;
                 }
@@ -6123,7 +6156,8 @@ static void reader_engine_task(void *arg)
             }
             if (reader_rendering)
                 reader_finish_book_render(instance);
-            (void)reader_discard_dma_audio();
+            if (!output_prepared)
+                (void)reader_discard_dma_audio();
             strlcpy(reader_announcement,
                     clock_mode ? "setting clock"
                     : remote ? "NVDA remote"
@@ -6153,7 +6187,7 @@ static void reader_engine_task(void *arg)
             bool opening_started = false;
             bool instant_advance = reader_instant_advance;
             reader_instant_advance = false;
-            if (!reader_discard_dma_audio()) {
+            if (!output_prepared && !reader_discard_dma_audio()) {
                 ESP_LOGE(TAG, "could not reset audio output");
                 continue;
             }
@@ -6246,8 +6280,11 @@ static void reader_engine_task(void *arg)
                 reader_opening_tone_stop = true;
                 continue;
             }
+            speech_engine_playback_hints_t playback_hints;
+            speech_engine_playback_hints(instance, &playback_hints);
             unsigned completed_start_target_ms = reader_quick_start
-                ? NAVIGATION_START_MS : ROLLING_START_MS;
+                ? playback_hints.navigation_buffer_ms
+                : playback_hints.initial_buffer_ms;
             reader_quick_start = false;
             reader_opening_tone_stop = true;
             while (reader_opening_tone_running)
@@ -6272,7 +6309,7 @@ static void reader_engine_task(void *arg)
         if (event.kind == AUDIO_NAVIGATION_SPEECH) {
             printf("NAV_SPEECH speaking generation=%lu text=%s\n",
                    (unsigned long)event.generation, event.text);
-            if (!reader_discard_dma_audio()) {
+            if (!output_prepared && !reader_discard_dma_audio()) {
                 ESP_LOGE(TAG, "could not reset audio output");
                 continue;
             }
@@ -6303,7 +6340,7 @@ static void reader_engine_task(void *arg)
             continue;
         }
         if (event.kind != AUDIO_SPEECH && event.kind != AUDIO_PARAGRAPH) {
-            if (!reader_discard_dma_audio()) {
+            if (!output_prepared && !reader_discard_dma_audio()) {
                 ESP_LOGE(TAG, "could not reset audio output");
                 continue;
             }
@@ -6353,12 +6390,16 @@ static void reader_engine_task(void *arg)
             /* The engine instance is single-owner. Let background book
                rendering finish (or honour a rate-change abort) before using
                it for a spoken control announcement. */
-            if (reader_rendering) {
-                reader_finish_book_render(instance);
-            }
-            if (!reader_discard_dma_audio()) {
+            /* Flush the live DMA ring first.  Waiting for the renderer while
+               the old channel is still active can repeat fragments of book
+               PCM during a pause-to-menu transition.  Rendering targets the
+               PSRAM ring, so resetting I2S before waiting is safe. */
+            if (!output_prepared && !reader_discard_dma_audio()) {
                 ESP_LOGE(TAG, "could not reset audio output");
                 continue;
+            }
+            if (reader_rendering) {
+                reader_finish_book_render(instance);
             }
             ESP_ERROR_CHECK(speech_engine_set(instance, SPEECH_SETTING_RATE,
                                              reader_rate)
