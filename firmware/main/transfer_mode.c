@@ -19,6 +19,7 @@
 #include "esp_mac.h"
 #include "esp_netif.h"
 #include "esp_sntp.h"
+#include "clock_retention.h"
 #include "esp_timer.h"
 #include "esp_vfs_fat.h"
 #include "esp_wifi.h"
@@ -36,6 +37,13 @@
 #define MAX_PATH_LEN 512
 
 static const char *TAG = "transfer_mode";
+
+static void transfer_clock_synced(struct timeval *value)
+{
+    (void)value;
+    rr_clock_retain_now();
+    ESP_LOGI(TAG, "Clock synchronised and retained");
+}
 static EventGroupHandle_t wifi_events;
 static httpd_handle_t server;
 static sdmmc_card_t *card;
@@ -678,12 +686,14 @@ static esp_err_t transfer_mode_start_internal(const char *fallback_ssid,
     if (!esp_sntp_enabled()) {
         esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
         esp_sntp_setservername(0, "pool.ntp.org");
+        esp_sntp_set_time_sync_notification_cb(transfer_clock_synced);
         esp_sntp_init();
     }
     for (int i = 0; i < 30 && time(NULL) < 1704067200; ++i)
         vTaskDelay(pdMS_TO_TICKS(100));
     ESP_LOGI(TAG, "Clock %s", time(NULL) >= 1704067200
              ? "synchronised" : "not yet synchronised");
+    rr_clock_retain_now();
 
     ESP_RETURN_ON_ERROR(mdns_init(), TAG, "mDNS init");
     ESP_RETURN_ON_ERROR(mdns_hostname_set(status->hostname), TAG,
@@ -704,7 +714,7 @@ static esp_err_t transfer_mode_start_internal(const char *fallback_ssid,
 
     httpd_config_t http = HTTPD_DEFAULT_CONFIG();
     http.uri_match_fn = httpd_uri_match_wildcard;
-    http.max_uri_handlers = 4;
+    http.max_uri_handlers = 6;
     /* Windows WebClient opens several parallel DAV sessions and can retain
        dead ones for roughly a minute.  Reclaim the least-recently-used
        session instead of refusing a new Explorer request. */
@@ -727,6 +737,14 @@ static esp_err_t transfer_mode_start_internal(const char *fallback_ssid,
     const httpd_uri_t web_slash = {
         .uri = "/web/", .method = HTTP_GET, .handler = transfer_web_handler,
     };
+    const httpd_uri_t substitutions = {
+        .uri = "/substitutions*", .method = HTTP_ANY,
+        .handler = transfer_substitutions_handler,
+    };
+    const httpd_uri_t settings = {
+        .uri = "/settings*", .method = HTTP_ANY,
+        .handler = transfer_settings_handler,
+    };
     const httpd_uri_t root = {
         .uri = "/", .method = HTTP_ANY, .handler = webdav_handler,
     };
@@ -737,6 +755,10 @@ static esp_err_t transfer_mode_start_internal(const char *fallback_ssid,
                         "browser file manager");
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server, &web_slash), TAG,
                         "browser file manager slash alias");
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server, &substitutions), TAG,
+                        "substitution editor");
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server, &settings), TAG,
+                        "reader settings");
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server, &root), TAG,
                         "root WebDAV handler");
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server, &wildcard), TAG,

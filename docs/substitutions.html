@@ -1,0 +1,505 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pronunciation substitutions — Retroreader</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip-link" href="#content">Skip to content</a>
+  <header class="site-header"><a class="brand" href="index.html">Retroreader</a><nav aria-label="Main navigation"><a href="index.html">Home</a><a href="get-a-kit.html">Get a kit</a><a href="why-not.html">Why not?</a><a href="compare.html">Compare</a><a href="voices.html">Voice samples</a><a href="install.html">Install</a><a href="using-the-reader.html">Documentation</a><a href="changelog.html">Changelog</a><a href="about.html">About Sean</a><a href="https://github.com/SeanRandall/freenoveKit_Epub">GitHub</a></nav></header>
+  <main id="content">
+<h1>Pronunciation substitutions</h1>
+<p>Retroreader replaces text immediately before it reaches the selected speech
+engine. Files are UTF-8, tab-separated text: text to find in column one and its
+replacement in column two. Do not use spaces in place of the tab.</p>
+<pre><code class="language-text">NVDA    N V D A
+Dr. doctor
+</code></pre>
+<p>Put files in <code>.rr</code>. <code>substitutions.tsv</code> applies to every voice. An optional
+engine file loads afterwards and overrides a global entry with the same first
+column. The combined limit is 160 entries.</p>
+<table>
+<thead>
+<tr>
+<th>Engine</th>
+<th>Engine-specific filename</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>OpenEVV</td>
+<td><code>substitutions.openevv.tsv</code></td>
+</tr>
+<tr>
+<td>DECtalk DTC-01</td>
+<td><code>substitutions.dectalk.tsv</code></td>
+</tr>
+<tr>
+<td>DECtalk 4.3</td>
+<td><code>substitutions.dectalk4.3.tsv</code></td>
+</tr>
+<tr>
+<td>DoubleTalk Hybrid</td>
+<td><code>substitutions.doubletalk.tsv</code></td>
+</tr>
+<tr>
+<td>Monologue</td>
+<td><code>substitutions.monologue.tsv</code></td>
+</tr>
+<tr>
+<td>Pico</td>
+<td><code>substitutions.pico.tsv</code></td>
+</tr>
+<tr>
+<td>OpenBST</td>
+<td><code>substitutions.openbst.tsv</code></td>
+</tr>
+<tr>
+<td>TruVoice</td>
+<td><code>substitutions.truvoice.tsv</code></td>
+</tr>
+<tr>
+<td>Apollo</td>
+<td><code>substitutions.apollo.tsv</code></td>
+</tr>
+<tr>
+<td>Prose 2000</td>
+<td><code>substitutions.prose2000.tsv</code></td>
+</tr>
+</tbody>
+</table>
+<p>Plain replacements belong in the global file. Phonemes and commands belong
+only in the matching engine file. Restart Retroreader after editing one.</p>
+<h2>Escapes for control-character engines</h2>
+<p>Replacement fields recognise <code>\\e</code> for Escape, <code>\\xNN</code> for a non-zero hex
+byte, <code>\\r</code>, <code>\\n</code>, <code>\\t</code>, and <code>\\\\</code> for a literal backslash. They are
+decoded only in column two. Thus <code>\\x01</code> produces DoubleTalk's Control-A and
+<code>\\e[2I</code> produces Prose's phoneme-input command.</p>
+<h2>OpenEVV: IBM Speech Pronunciation Rules</h2>
+<p>OpenEVV accepts IBM ViaVoice/Eloquence annotations and Speech Pronunciation
+Rules (SPR). Enclose an SPR pronunciation in backquote-square brackets:</p>
+<pre><code class="language-text">though  `[.1Do]
+shocking    `[.1Sa.0kIG]
+construction    `[kXn1strHkSXn]
+</code></pre>
+<p>SPR is case-sensitive. <code>1</code> is primary stress, <code>2</code> secondary stress, <code>0</code>
+unstressed, and <code>.</code> is a syllable boundary (optional in English).</p>
+<table>
+<thead>
+<tr>
+<th>Set</th>
+<th>Symbols</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>US vowels</td>
+<td><code>a A e E i I o c u U H R</code></td>
+</tr>
+<tr>
+<td>UK vowels</td>
+<td><code>a A e E i I o c @ u U H R</code></td>
+</tr>
+<tr>
+<td>Diphthongs</td>
+<td><code>O W Y</code></td>
+</tr>
+<tr>
+<td>Reduced vowels</td>
+<td><code>x X</code></td>
+</tr>
+<tr>
+<td>US consonants</td>
+<td><code>b p d t g k D T v f z s Z S J C h m n G r l w y M ? F N</code></td>
+</tr>
+<tr>
+<td>UK consonants</td>
+<td><code>b p d t g k D T v f z s Z S J C h m n G r l L y w</code></td>
+</tr>
+<tr>
+<td>Modifiers</td>
+<td><code>1 2 0 .</code></td>
+</tr>
+</tbody>
+</table>
+<table>
+<thead>
+<tr>
+<th>Annotation</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>`v1</code> through <code>`v8</code></td>
+<td>Select a preset voice</td>
+</tr>
+<tr>
+<td><code>`vg&lt;number&gt;</code></td>
+<td>Gender</td>
+</tr>
+<tr>
+<td><code>`vh&lt;number&gt;</code></td>
+<td>Head size</td>
+</tr>
+<tr>
+<td><code>`vb&lt;number&gt;</code></td>
+<td>Baseline pitch</td>
+</tr>
+<tr>
+<td><code>`vf&lt;number&gt;</code></td>
+<td>Pitch fluctuation</td>
+</tr>
+<tr>
+<td><code>`vr&lt;number&gt;</code></td>
+<td>Roughness</td>
+</tr>
+<tr>
+<td><code>`vy&lt;number&gt;</code></td>
+<td>Breathiness</td>
+</tr>
+<tr>
+<td><code>`vs&lt;number&gt;</code></td>
+<td>Speaking speed</td>
+</tr>
+<tr>
+<td><code>`vv&lt;number&gt;</code></td>
+<td>Voice volume</td>
+</tr>
+<tr>
+<td><code>`0</code> through <code>`4</code>, and <code>`00</code></td>
+<td>Inline pause controls</td>
+</tr>
+</tbody>
+</table>
+<p>Annotations persist until changed, so restore values a replacement changes.
+API parameter names such as <code>pp0</code> must not be placed in spoken text.</p>
+<h2>DECtalk DTC-01</h2>
+<p>DTC-01's square-bracket phonemic mode is enabled by the engine. Put phonemes
+directly in brackets, for example <code>[d'iyk]</code>. Its two-character alphabet is
+case-insensitive.</p>
+<table>
+<thead>
+<tr>
+<th>Set</th>
+<th>Symbols</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Vowels</td>
+<td><code>aa ae ah ao aw ax ay eh ey ih ix iy ow oy uh uw yu</code></td>
+</tr>
+<tr>
+<td>R-coloured vowels</td>
+<td><code>ir er ar or ur rr</code></td>
+</tr>
+<tr>
+<td>Syllabics</td>
+<td><code>el em en</code></td>
+</tr>
+<tr>
+<td>Consonants</td>
+<td><code>b ch d dh f g hx jh k l m n nx p r s sh t th v w y z zh</code></td>
+</tr>
+<tr>
+<td>Silence/allophones</td>
+<td><code>_ rx lx dx tx q</code></td>
+</tr>
+</tbody>
+</table>
+<table>
+<thead>
+<tr>
+<th>Modifier</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>'</code>, backquote, <code>"</code></td>
+<td>Primary, secondary and emphatic stress; before vowel</td>
+</tr>
+<tr>
+<td><code>-</code>, <code>*</code>, <code>#</code>, space</td>
+<td>Syllable, morpheme, compound and word boundaries</td>
+</tr>
+<tr>
+<td><code>, . ? !</code></td>
+<td>Clause endings</td>
+</tr>
+<tr>
+<td><code>phoneme&lt;duration,pitch&gt;</code></td>
+<td>Duration in ms and ending pitch in Hz</td>
+</tr>
+<tr>
+<td>pitch <code>1</code> to <code>37</code></td>
+<td>Musical C2 through C5 with vibrato</td>
+</tr>
+</tbody>
+</table>
+<p>Stops <code>p t k b d g</code> cannot be sustained. Other bracket commands include <code>:ra
+120</code> to <code>:ra 350</code>, <code>:cp</code> and <code>:pp</code> from 0 to 9000 ms, voices <code>:np :nb :nh
+:nf :nk :nr :nu :nv</code>, and <code>:dv</code> voice-design parameters. DTC-01 does not use
+the newer <code>[:phoneme arpabet ...]</code> command.</p>
+<h2>DECtalk 4.3</h2>
+<p>When substitutions are loaded, Retroreader automatically prefixes every
+DECtalk 4.3 utterance with <code>[:phoneme arpabet speak on]</code>. A replacement can
+therefore contain bracketed ARPAbet directly.</p>
+<table>
+<thead>
+<tr>
+<th>Set</th>
+<th>Symbols</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Vowels</td>
+<td><code>e a i E A I O o u ^ W Y R c @ U | x</code></td>
+</tr>
+<tr>
+<td>Consonants</td>
+<td><code>p t k f T s S C w y h l L N b d g v D z Z J m n G r q Q &amp; F</code></td>
+</tr>
+<tr>
+<td>R-coloured vowels</td>
+<td><code>B K P M j</code></td>
+</tr>
+<tr>
+<td>Stress/boundaries</td>
+<td><code>'</code> primary, backquote secondary, <code>"</code> emphatic, <code># ( ) * ~ -</code></td>
+</tr>
+</tbody>
+</table>
+<p>Commands include <code>[:rate 200]</code>, <code>[:name paul]</code>, <code>[:volume 50]</code>, <code>[:comma
+150]</code>, <code>[:period 300]</code>, <code>[:punct ...]</code>, <code>[:pronounce ...]</code>, <code>[:say ...]</code>,
+<code>[:dv ...]</code>, and <code>[:tone ...]</code>. Avoid index, sync, play, logging and error
+commands because Retroreader owns buffering and navigation.</p>
+<h2>DoubleTalk Hybrid</h2>
+<p>Enter direct phoneme mode with <code>\\x01D</code>, separate every phoneme with a space,
+and return to text mode with <code>\\x01T</code>.</p>
+<pre><code class="language-text">computer    \x01DK AX M P YY UW DX ER\x01T
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Set</th>
+<th>Symbols</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>English vowels</td>
+<td><code>AA AE AH AW AX AY EH ER EY IH IX IY OW OY UH UW</code></td>
+</tr>
+<tr>
+<td>English consonants</td>
+<td><code>B CH D DH DX F G H J K KX L M N NG P PX R S SH T TH TX V W WH Y YY Z ZH</code></td>
+</tr>
+<tr>
+<td>Additional multilingual sounds</td>
+<td><code>A E EI EW I NY O RR U</code></td>
+</tr>
+<tr>
+<td>Pauses</td>
+<td>apostrophe short, space variable, comma medium, period long</td>
+</tr>
+</tbody>
+</table>
+<p>Inside phoneme mode, <code>nn</code> sets pitch 0–99, <code>/</code> and backslash raise and lower
+pitch temporarily, <code>+</code> and <code>-</code> alter speed, and <code>&gt;</code> and <code>&lt;</code> alter volume.
+Ordinary commands also use <code>\\x01</code>, for example <code>\\x019S</code> for speed 9. Always
+return to text mode in the same replacement.</p>
+<h2>Pico</h2>
+<p>Pico accepts one-word X-SAMPA in its native compact tag:</p>
+<pre><code class="language-text">word    &lt;phoneme ph='&quot;w3:d'/&gt;
+</code></pre>
+<p>The inventory is language-dependent. The useful English core is:</p>
+<table>
+<thead>
+<tr>
+<th>Set</th>
+<th>X-SAMPA symbols</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Stops/fricatives/nasals</td>
+<td><code>p b t d k g f v T D s z S Z h m n N</code></td>
+</tr>
+<tr>
+<td>Other consonants</td>
+<td><code>t_S d_Z l r\\ w j</code></td>
+</tr>
+<tr>
+<td>US/UK vowels</td>
+<td><code>I E { V Q U @ 3 A i: u: O:</code></td>
+</tr>
+<tr>
+<td>Diphthongs</td>
+<td><code>e_I a_I O_I a_U @U I@ E@ U@</code></td>
+</tr>
+<tr>
+<td>Modifiers</td>
+<td><code>"</code> primary stress, <code>%</code> secondary, <code>.</code> syllable, <code>:</code> length, <code>=</code> syllabic</td>
+</tr>
+</tbody>
+</table>
+<p>Use the symbols of the installed Pico language. The compact tag, rather than a
+full <code>&lt;speak&gt;</code> document, is what reaches Pico's low-level engine.</p>
+<h2>TruVoice</h2>
+<p>In normal text mode, prefix each TruVoice phoneme symbol with <code>&amp;</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Sound group</th>
+<th>Symbols</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Vowels/diphthongs</td>
+<td><code>A a b c E e f g I i O o U u v w y 3 4 5 @ |</code></td>
+</tr>
+<tr>
+<td>Consonants</td>
+<td><code>B C D d F G H J K L l M N n P q R S s T t V W X x Y Z z ~</code></td>
+</tr>
+<tr>
+<td>Stress</td>
+<td><code>1</code> primary, <code>2</code> secondary</td>
+</tr>
+</tbody>
+</table>
+<p>Examples: <code>&amp;C</code> “ch”, <code>&amp;s</code> “sh”, <code>&amp;X</code> unvoiced “th”, <code>&amp;x</code> voiced “th”, <code>&amp;~</code>
+“ng”, and <code>&amp;@</code> schwa. Symbols are case-sensitive. Advanced users may use
+<code>\\e[1I</code> for continuous phoneme mode and <code>\\e[0I</code> to return to text, but
+ampersand phonemes are safer in a single replacement.</p>
+<h2>Prose 2000</h2>
+<p>Prose 2000 1988 supports direct phoneme input. Use <code>\\e[2I</code>, the engine's
+two-character phoneme names, then <code>\\e[0I</code> to return to text. Primary and
+secondary stress are <code>1</code> and <code>2</code> after the vowel; <code>"</code> is emphatic stress. A
+phoneme may be followed by <code>!duration;pitch</code> (or <code>/duration;pitch</code>) to override
+timing and pitch. Keep the mode switch and reset in one replacement.</p>
+<p>The 1983 Prose variant lacks the same documented phoneme-spelling front end;
+use plain text substitutions there.</p>
+<h2>Dolphin Apollo II</h2>
+<p>The Apollo port retains the original firmware's command parser. For a mixed
+text-and-phoneme replacement, prefix every phoneme with an underscore. This is
+safer than switching the entire input stream into phonetic mode.</p>
+<pre><code class="language-text">cat _K_AE_T
+again   _A_G_P_E_N
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Sound group</th>
+<th>Phonemes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Vowels/diphthongs</td>
+<td><code>_AA _AI _AR _AW _A _EE _EI _ER _E _IA _IE _I _OA _00 _OR _OW _OY _O _UU _U</code></td>
+</tr>
+<tr>
+<td>Stops</td>
+<td><code>_B _D _G _K _KK _P _PP _T _TT</code></td>
+</tr>
+<tr>
+<td>Fricatives/affricates</td>
+<td><code>_CH _DH _F _H _J _SH _S _TH _V _X _ZH _Z</code></td>
+</tr>
+<tr>
+<td>Nasals/liquids/glides</td>
+<td><code>_L _M _N _NG _Q _QQ _R _W _Y</code></td>
+</tr>
+</tbody>
+</table>
+<p><code>_QQ</code> is a slight pause. <code>_KK</code>, <code>_PP</code> and <code>_TT</code> are the variants heard in
+words such as “school”, “speech” and “steel”. The manual's <code>_00</code> uses two
+zeroes rather than two letter O characters, as in “good”. Use <code>@X1</code> for an entirely phonetic run and
+<code>@X0</code> to return to ordinary text; both switches must be in the same replacement.</p>
+<p>Apollo also exposes its voice-shaping commands in replacements:</p>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>@W1</code>–<code>@W9</code></td>
+<td>Speed, approximately 80–580 words per minute</td>
+</tr>
+<tr>
+<td><code>@F0</code>–<code>@FF</code>, <code>@F+</code>, <code>@F-</code></td>
+<td>Pitch centre or a small pitch step</td>
+</tr>
+<tr>
+<td><code>@R0</code>–<code>@R7</code></td>
+<td>Overall prosody/excitability</td>
+</tr>
+<tr>
+<td><code>@Q0</code>–<code>@Q9</code></td>
+<td>Inter-word pause</td>
+</tr>
+<tr>
+<td><code>@D0</code>–<code>@DF</code></td>
+<td>End-of-phrase pause</td>
+</tr>
+<tr>
+<td><code>@B1</code>–<code>@B8</code></td>
+<td>Voicing, from breathy whisper to fully voiced</td>
+</tr>
+<tr>
+<td><code>@M00</code>–<code>@M3F</code></td>
+<td>Mark–space ratio, affecting voice depth</td>
+</tr>
+<tr>
+<td><code>@K0</code>, <code>@K1</code></td>
+<td>Male or non-male formant table</td>
+</tr>
+<tr>
+<td><code>@$0</code>–<code>@$7</code></td>
+<td>Source/filter combination</td>
+</tr>
+<tr>
+<td><code>@V1</code>–<code>@V6</code></td>
+<td>Original preset voices; also resets custom formant offsets</td>
+</tr>
+<tr>
+<td><code>@A0</code>–<code>@AF</code></td>
+<td>Synthesis volume within an utterance</td>
+</tr>
+</tbody>
+</table>
+<p>The source/filter values are: 0 male/default, 1 non-male/default, 2 male/spike,
+3 non-male/spike, 4 male/cut-down, 5 non-male/cut-down, 6 male/reduced-high,
+and 7 non-male/reduced-high.</p>
+<p>The advanced formant command is <code>@Udhh+</code> or <code>@Udhh-</code>, where <code>d</code> selects the
+parameter and <code>hh</code> is a hexadecimal offset. Parameters are 0 nasal-formant
+frequency, 1–3 formant frequencies F1–F3, 4 low-frequency amplitude, 5–8
+amplitudes A1–A4, and 9 voicing. The fourth formant frequency is fixed.</p>
+<p>These offsets persist in the Apollo firmware state. Undo an experimental
+offset with the same value and opposite sign, or select a preset with <code>@V1</code>
+through <code>@V6</code> to clear the offsets. Retroreader reapplies its ordinary rate,
+pitch, expression and volume at the start of each utterance, but it does not
+automatically erase formant offsets inserted by a substitution.</p>
+<p>Apollo also accepts <code>@Rchh</code> to alter one of its internal prosody bytes (<code>c</code> is
+<code>A</code> through <code>Z</code>, <code>hh</code> is hexadecimal). Those byte meanings are not named in
+the user manual, so this low-level form is intentionally documented as
+experimental rather than presented as 26 reliable user controls.</p>
+<h2>Engines currently limited to plain replacements</h2>
+<p>The current Monologue and OpenBST adapters do not expose a validated
+direct-phoneme syntax. Their engine-specific files still support ordinary
+pronunciation spellings. This is an adapter limitation, not a claim that the
+original products contain no lower-level phoneme data.</p>
+  </main>
+  <footer><p>&copy; 2026 <a href="https://uk.linkedin.com/in/accessiblesean">Sean Randall</a>. Retroreader is an open-source project.</p></footer>
+</body>
+</html>

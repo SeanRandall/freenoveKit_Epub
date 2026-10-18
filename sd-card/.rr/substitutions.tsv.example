@@ -1,0 +1,3 @@
+# Rename this file to substitutions.tsv for replacements used by every engine.
+# Each active line is: text to find<TAB>replacement text
+NVDA	N V D A

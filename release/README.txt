@@ -1,4 +1,4 @@
-RetroReader development firmware
+RetroReader 2026.10.18 alpha firmware
 
 Target hardware:
 Freenove Media Kit for ESP32-S3, 1.14-inch model, 16 MB flash.

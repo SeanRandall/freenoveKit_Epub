@@ -209,5 +209,7 @@ bool speech_engine_get(speech_engine_t *engine, speech_setting_id_t id, int *val
 bool speech_engine_supports_annotations(const speech_engine_t *engine)
 {
     (void)engine;
-    return false;
+    /* TruVoice accepts & followed by one of its phoneme symbols while it is
+       otherwise in normal text mode. */
+    return true;
 }

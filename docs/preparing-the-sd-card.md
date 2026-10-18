@@ -34,7 +34,7 @@ The File transfer menu item appears only when both Wi-Fi values are available. O
 
 - "nvdaremote.ini" configures NVDA Remote listening mode.
 - "remsound.ini" configures RemSound listening mode.
-- "substitutions.tsv" contains tab-separated pronunciation substitutions. Put the text to find in the first column and its replacement in the second.
+- "substitutions.tsv" contains global tab-separated pronunciation substitutions. Engine-specific files such as "substitutions.openevv.tsv" may add or override entries for one voice. See [Pronunciation substitutions](substitutions.html).
 
 The template contains commented examples. Rename an example only when you intend to configure that service.
 

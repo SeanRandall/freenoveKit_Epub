@@ -3,18 +3,27 @@
 Retroreader remains alpha software. Releases may change settings, storage
 layouts and behaviour without preserving compatibility with earlier builds.
 
+## 2026.10.18 — pre-release
+
+- Resume MP3 and M4B playback from the saved listening position.
+- Add an optional audio-folder playlist mode. Pure audio folders can be opened
+  as books, resume at the last file and position, and expose file navigation;
+  folders containing EPUB or text documents remain ordinary library folders.
+- Add a hold-Up interface switcher for moving among the menu, speech settings,
+  playing-screen status items, library and the current document. Holding any
+  other key leaves either settings submenu.
+- Retain the most recently known clock value over software restarts and restore
+  accurate network time whenever Wi-Fi is available.
+- Support a global pronunciation-substitution file plus an overriding
+  engine-specific TSV file for each installed speech engine.
+- Add accessible browser editors for pronunciation substitutions and reader
+  settings alongside wireless SD-card management.
+- Correct directional-key handling and improve rapid interface navigation.
+
 ## 2026.10.17 — pre-release
 
-- Add the British Dolphin Apollo II speech synthesizer, reconstructed from the
-  original hardware firmware and rendered natively on the ESP32-S3.
-- Provide Apollo controls for rate, voice volume, pitch, its male and non-male
-  speaker tables, and expression. The original Apollo deliberately reduces
-  expression at faster rates.
-- Stream Apollo speech as it is synthesized for responsive, interruptible
-  menus and reading, while yielding regularly to the reader interface.
-- Fix a crash when moving through engine-specific voice settings.
-- Add Apollo to the web installer, downloadable firmware, voice samples and
-  source-provenance information.
+- Add the British Dolphin Apollo II speech synthesizer.
+- Add the Speech Plus Prose 2000 v3.4.1 US English speech synthesizer.
 
 ## 2026.10.16 — pre-release
 

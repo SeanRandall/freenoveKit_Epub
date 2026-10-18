@@ -242,7 +242,7 @@ bool speech_engine_get(speech_engine_t *engine, speech_setting_id_t id, int *val
     case SPEECH_SETTING_PITCH: *value = engine->pitch; return true;
     case SPEECH_SETTING_VOICE: *value = engine->voice; return true;
     case SPEECH_SETTING_EXPRESSION: *value = engine->prosody; return true;
-    case SPEECH_SETTING_ANNOTATED_INPUT: *value = 0; return true;
+    case SPEECH_SETTING_ANNOTATED_INPUT: *value = 1; return true;
     default: return false;
     }
 }
@@ -250,5 +250,7 @@ bool speech_engine_get(speech_engine_t *engine, speech_setting_id_t id, int *val
 bool speech_engine_supports_annotations(const speech_engine_t *engine)
 {
     (void)engine;
-    return false;
+    /* The native Apollo firmware parser accepts embedded _PH phonemes and
+       its original @ command language. */
+    return true;
 }

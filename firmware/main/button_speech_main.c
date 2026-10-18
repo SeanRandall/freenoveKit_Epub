@@ -41,6 +41,7 @@
 #include "esp_audio_simple_dec.h"
 #include "esp_audio_simple_dec_default.h"
 #include "speech_engine.h"
+#include "clock_retention.h"
 
 #ifndef RR_ENGINE_SAMPLE_RATE
 #define RR_ENGINE_SAMPLE_RATE 11025
@@ -177,6 +178,19 @@ static volatile unsigned reader_media_target_seconds;
 static volatile unsigned reader_media_position_seconds;
 static volatile unsigned reader_media_duration_seconds;
 static ReaderContentType reader_media_type;
+static bool reader_audio_folder_playlists;
+static bool reader_playlist_active;
+static ReaderLibraryEntry *reader_playlist_entries;
+static size_t reader_playlist_count;
+static size_t reader_playlist_capacity;
+static size_t reader_playlist_index;
+static char reader_playlist_path[320];
+static volatile bool reader_playlist_save_requested;
+static volatile bool reader_playlist_read_requested;
+static volatile bool reader_playlist_read_done;
+static char reader_pending_playlist_folder[320];
+static char reader_pending_playlist_file[320];
+static char reader_playlist_saved_file[320];
 #define READER_MEDIA_CHAPTER_MAX 128
 typedef struct {
     unsigned seconds;
@@ -185,6 +199,7 @@ typedef struct {
 static ReaderMediaChapter *reader_media_chapters;
 static size_t reader_media_chapter_count;
 typedef enum {
+    READER_MEDIA_JUMP_FILE,
     READER_MEDIA_JUMP_CHAPTER,
     READER_MEDIA_JUMP_30_SECONDS,
     READER_MEDIA_JUMP_1_MINUTE,
@@ -244,6 +259,7 @@ typedef enum {
     READER_MENU_UNLOCK_ACTION,
     READER_MENU_RECENT_FILES,
     READER_MENU_BOOK_OPENING,
+    READER_MENU_AUDIO_FOLDERS,
     READER_MENU_INTERFACE_SOUNDS,
     READER_MENU_STATUS,
     READER_MENU_CLEAR_CACHE,
@@ -780,6 +796,36 @@ static void reader_dictionary_decode(char *text)
     *dst = 0;
 }
 
+/* TSV files must remain ordinary editable text, even for engines whose
+ * command protocol uses control bytes.  Decode a deliberately small set of
+ * C-style escapes in the replacement column only. */
+static void reader_dictionary_decode_escapes(char *text)
+{
+    unsigned char *src = (unsigned char *)text;
+    unsigned char *dst = (unsigned char *)text;
+    while (*src) {
+        if (*src++ != '\\') { *dst++ = src[-1]; continue; }
+        if (*src == '\\') { *dst++ = *src++; continue; }
+        if (*src == 'e') { *dst++ = 0x1b; ++src; continue; }
+        if (*src == 'r') { *dst++ = '\r'; ++src; continue; }
+        if (*src == 'n') { *dst++ = '\n'; ++src; continue; }
+        if (*src == 't') { *dst++ = '\t'; ++src; continue; }
+        if (*src == 'x' && isxdigit(src[1]) && isxdigit(src[2])) {
+            int high = isdigit(src[1]) ? src[1] - '0'
+                                       : 10 + tolower(src[1]) - 'a';
+            int low = isdigit(src[2]) ? src[2] - '0'
+                                      : 10 + tolower(src[2]) - 'a';
+            unsigned char value = (unsigned char)((high << 4) | low);
+            /* NUL would truncate the stored replacement. */
+            if (value) *dst++ = value;
+            src += 3;
+            continue;
+        }
+        *dst++ = '\\';
+    }
+    *dst = 0;
+}
+
 static void reader_dictionary_strip_commands(char *text)
 {
     char *src = text, *dst = text;
@@ -802,17 +848,25 @@ static char *reader_psram_strdup(const char *text)
     return copy;
 }
 
-static void reader_load_substitutions(void)
+static const char *reader_substitution_engine_id(void)
 {
-    const char *path = "/sdcard/.rr/substitutions.tsv";
+    const char *id = speech_engine_storage_id();
+    if (!strcmp(id, "oevv")) return "openevv";
+    if (!strcmp(id, "dectalk-43-private")) return "dectalk4.3";
+    if (!strcmp(id, "dectalk-dtc01")) return "dectalk";
+    if (!strncmp(id, "monologue-", 10)) return "monologue";
+    if (!strncmp(id, "doubletalk-", 11)) return "doubletalk";
+    if (!strncmp(id, "openbst", 7)) return "openbst";
+    if (!strncmp(id, "truvoice", 8)) return "truvoice";
+    if (!strncmp(id, "apollo2", 7)) return "apollo";
+    if (!strncmp(id, "prose2000", 9)) return "prose2000";
+    return id;
+}
+
+static void reader_load_substitution_file(const char *path, bool override)
+{
     FILE *file = fopen(path, "rb");
-    if (!file) {
-        puts("SUBSTITUTIONS none path=/sdcard/.rr/substitutions.tsv");
-        return;
-    }
-    reader_substitutions = heap_caps_calloc(160,
-        sizeof(*reader_substitutions), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!reader_substitutions) { fclose(file); return; }
+    if (!file) { printf("SUBSTITUTIONS none path=%s\n", path); return; }
     char line[512];
     while (reader_substitution_count < 160
            && fgets(line, sizeof(line), file)) {
@@ -822,6 +876,7 @@ static void reader_load_substitutions(void)
         *tab++ = 0;
         reader_dictionary_decode(line);
         reader_dictionary_decode(tab);
+        reader_dictionary_decode_escapes(tab);
         /* Punctuation-dash substitutions from the desktop dictionary change
            the way OpenEVV parses otherwise normal compounds.  Word-specific
            entries such as Ha-Shan remain useful, but rules beginning with a
@@ -831,16 +886,40 @@ static void reader_load_substitutions(void)
             puts("SUBSTITUTION skipped=punctuation_dash_rule");
             continue;
         }
-        ReaderSubstitution *rule =
-            &reader_substitutions[reader_substitution_count];
-        rule->from = reader_psram_strdup(line);
-        rule->to = reader_psram_strdup(tab);
-        if (!rule->from || !rule->to) break;
-        ++reader_substitution_count;
+        ReaderSubstitution *rule = NULL;
+        char *replacement = reader_psram_strdup(tab);
+        if (!replacement) break;
+        if (override) {
+            for (size_t i = 0; i < reader_substitution_count; ++i) {
+                if (!strcmp(reader_substitutions[i].from, line)) {
+                    rule = &reader_substitutions[i];
+                    free(rule->to);
+                    break;
+                }
+            }
+        }
+        if (!rule) rule = &reader_substitutions[reader_substitution_count];
+        if (!rule->from) rule->from = reader_psram_strdup(line);
+        rule->to = replacement;
+        if (!rule->from) { free(replacement); rule->to = NULL; break; }
+        if (rule == &reader_substitutions[reader_substitution_count])
+            ++reader_substitution_count;
     }
     fclose(file);
     printf("SUBSTITUTIONS loaded=%u path=%s\n",
            (unsigned)reader_substitution_count, path);
+}
+
+static void reader_load_substitutions(void)
+{
+    reader_substitutions = heap_caps_calloc(160,
+        sizeof(*reader_substitutions), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!reader_substitutions) return;
+    reader_load_substitution_file("/sdcard/.rr/substitutions.tsv", false);
+    char path[96];
+    snprintf(path, sizeof(path), "/sdcard/.rr/substitutions.%s.tsv",
+             reader_substitution_engine_id());
+    reader_load_substitution_file(path, true);
 }
 
 static const char *reader_apply_substitutions(const char *input)
@@ -1882,6 +1961,8 @@ static void reader_save_preferences(void)
                       reader_recent_files_enabled ? 1 : 0);
     (void)nvs_set_i32(reader_prefs, "instant",
                       reader_instant_opening ? 1 : 0);
+    (void)nvs_set_i32(reader_prefs, "audiofold",
+                      reader_audio_folder_playlists ? 1 : 0);
     for (size_t i = 0; i < READER_RECENT_MAX; ++i) {
         char key[12];
         snprintf(key, sizeof(key), "recent%u", (unsigned)i);
@@ -1898,6 +1979,8 @@ static void reader_save_preferences(void)
 
 static void reader_section_key_for(const char *path, char key[16]);
 static void reader_offset_key_for(const char *path, char key[16]);
+static void reader_playlist_key_for(const char *path, char key[16]);
+static void reader_playlist_move(int direction);
 
 static void reader_schedule_preferences_save(void)
 {
@@ -1937,6 +2020,19 @@ static void reader_flush_pending_nvs(void)
         (void)nvs_set_str(reader_prefs, "lastbook", name);
         (void)nvs_commit(reader_prefs);
         printf("LASTBOOK_SAVED name=%s\n", name);
+    }
+    if (reader_playlist_save_requested) {
+        char folder[sizeof(reader_pending_playlist_folder)];
+        char file[sizeof(reader_pending_playlist_file)];
+        strlcpy(folder, reader_pending_playlist_folder, sizeof(folder));
+        strlcpy(file, reader_pending_playlist_file, sizeof(file));
+        reader_playlist_save_requested = false;
+        char key[16];
+        reader_playlist_key_for(folder, key);
+        if (file[0]) (void)nvs_set_str(reader_prefs, key, file);
+        else (void)nvs_erase_key(reader_prefs, key);
+        (void)nvs_commit(reader_prefs);
+        printf("PLAYLIST_SAVED folder=%s file=%s\n", folder, file);
     }
 }
 
@@ -2011,6 +2107,8 @@ static void reader_load_preferences(void)
         reader_recent_files_enabled = value != 0;
     if (nvs_get_i32(reader_prefs, "instant", &value) == ESP_OK)
         reader_instant_opening = value != 0;
+    if (nvs_get_i32(reader_prefs, "audiofold", &value) == ESP_OK)
+        reader_audio_folder_playlists = value != 0;
     for (size_t i = 0; i < READER_RECENT_MAX; ++i) {
         char key[12];
         size_t length = sizeof(reader_recent_paths[i]);
@@ -2068,6 +2166,11 @@ static void reader_section_key_for(const char *path, char key[16])
 static void reader_offset_key_for(const char *path, char key[16])
 {
     snprintf(key, 16, "off%08x", (unsigned)reader_path_hash(path));
+}
+
+static void reader_playlist_key_for(const char *path, char key[16])
+{
+    snprintf(key, 16, "pl%08x", (unsigned)reader_path_hash(path));
 }
 
 static void reader_save_section(void)
@@ -2154,6 +2257,40 @@ static void reader_request_saved_section(void)
         vTaskDelay(pdMS_TO_TICKS(5));
     reader_saved_section = reader_pending_read_section;
     reader_saved_text_offset = reader_pending_read_offset;
+}
+
+static void reader_save_media_position(void)
+{
+    if (!reader_prefs || !reader_selected_path[0]) return;
+    strlcpy(reader_pending_position_path, reader_selected_path,
+            sizeof(reader_pending_position_path));
+    reader_pending_section = 0;
+    reader_pending_offset = reader_media_position_seconds;
+    reader_position_save_requested = true;
+    printf("MEDIA_POSITION_QUEUED path=%s seconds=%u\n",
+           reader_selected_path, reader_media_position_seconds);
+}
+
+static void reader_save_playlist_file(void)
+{
+    if (!reader_playlist_active || !reader_playlist_path[0]
+        || !reader_selected_path[0]) return;
+    strlcpy(reader_pending_playlist_folder, reader_playlist_path,
+            sizeof(reader_pending_playlist_folder));
+    strlcpy(reader_pending_playlist_file, reader_selected_path,
+            sizeof(reader_pending_playlist_file));
+    reader_playlist_save_requested = true;
+}
+
+static void reader_request_playlist_file(const char *folder)
+{
+    strlcpy(reader_pending_playlist_folder, folder,
+            sizeof(reader_pending_playlist_folder));
+    reader_playlist_saved_file[0] = 0;
+    reader_playlist_read_done = false;
+    reader_playlist_read_requested = true;
+    while (!reader_playlist_read_done)
+        vTaskDelay(pdMS_TO_TICKS(5));
 }
 
 static void reader_select_section_text(void)
@@ -2463,6 +2600,11 @@ static unsigned reader_media_seek_target(int direction)
 
 static void reader_media_seek(int direction)
 {
+    if (reader_media_jump_mode == READER_MEDIA_JUMP_FILE
+        && reader_playlist_active) {
+        reader_playlist_move(direction);
+        return;
+    }
     reader_media_target_seconds = reader_media_seek_target(direction);
     reader_media_position_seconds = reader_media_target_seconds;
     reader_media_finished = false;
@@ -2475,16 +2617,22 @@ static void reader_media_seek(int direction)
 
 static void reader_cycle_media_jump_mode(void)
 {
-    ReaderMediaJumpMode first = reader_media_chapter_count
-        ? READER_MEDIA_JUMP_CHAPTER : READER_MEDIA_JUMP_30_SECONDS;
+    ReaderMediaJumpMode first = reader_playlist_active
+        ? READER_MEDIA_JUMP_FILE
+        : (reader_media_chapter_count
+            ? READER_MEDIA_JUMP_CHAPTER : READER_MEDIA_JUMP_30_SECONDS);
     ReaderMediaJumpMode next = (ReaderMediaJumpMode)(reader_media_jump_mode + 1);
     if (next > READER_MEDIA_JUMP_NARROW) next = first;
+    if (!reader_playlist_active && next == READER_MEDIA_JUMP_FILE)
+        next = reader_media_chapter_count
+            ? READER_MEDIA_JUMP_CHAPTER : READER_MEDIA_JUMP_30_SECONDS;
     if (!reader_media_chapter_count && next == READER_MEDIA_JUMP_CHAPTER)
         next = READER_MEDIA_JUMP_30_SECONDS;
     reader_media_jump_mode = next;
     reader_media_search_step = 0;
     const char *name = "30 seconds";
-    if (next == READER_MEDIA_JUMP_CHAPTER) name = "chapters";
+    if (next == READER_MEDIA_JUMP_FILE) name = "files";
+    else if (next == READER_MEDIA_JUMP_CHAPTER) name = "chapters";
     else if (next == READER_MEDIA_JUMP_1_MINUTE) name = "1 minute";
     else if (next == READER_MEDIA_JUMP_5_MINUTES) name = "5 minutes";
     else if (next == READER_MEDIA_JUMP_NARROW) name = "narrowing search";
@@ -2828,6 +2976,153 @@ static void reader_add_recent(const char *path)
     reader_schedule_preferences_save();
 }
 
+static int reader_playlist_compare(const void *left_value,
+                                   const void *right_value)
+{
+    const ReaderLibraryEntry *left = left_value;
+    const ReaderLibraryEntry *right = right_value;
+    return strcasecmp(left->name, right->name);
+}
+
+static void reader_open_media_path(const char *path, ReaderContentType type,
+                                   bool resume)
+{
+    const char *relative = !strncmp(path, "/sdcard/", strlen("/sdcard/"))
+        ? path + strlen("/sdcard/") : path;
+    strlcpy(reader_pending_lastbook, relative, sizeof(reader_pending_lastbook));
+    reader_lastbook_save_requested = true;
+    strlcpy(reader_selected_path, path, sizeof(reader_selected_path));
+    reader_add_recent(path);
+    unsigned saved_seconds = 0;
+    if (resume) {
+        reader_request_saved_section();
+        saved_seconds = reader_saved_text_offset;
+    }
+    reader_media_mode = true;
+    reader_media_type = type;
+    reader_media_target_seconds = saved_seconds;
+    reader_media_position_seconds = saved_seconds;
+    reader_media_duration_seconds = 0;
+    reader_media_paused = false;
+    reader_media_finished = false;
+    if (type == READER_CONTENT_M4B)
+        reader_media_load_chapters(path);
+    else {
+        free(reader_media_chapters);
+        reader_media_chapters = NULL;
+        reader_media_chapter_count = 0;
+        reader_media_jump_mode = reader_playlist_active
+            ? READER_MEDIA_JUMP_FILE : READER_MEDIA_JUMP_30_SECONDS;
+        reader_media_search_step = 0;
+    }
+    reader_plain_text_mode = false;
+    reader_library = false;
+    reader_paused = false;
+    reader_loaded = false;
+    reader_save_playlist_file();
+    queue_audio(AUDIO_MEDIA_PLAY, NULL);
+    printf("MEDIA_OPEN path=%s resume=%u playlist=%d\n", path,
+           saved_seconds, reader_playlist_active);
+}
+
+/* A mixed document folder remains an ordinary browsable folder.  This keeps
+   the playlist convenience from hiding EPUB or text files stored alongside
+   audio. Other ancillary files (covers, cue sheets, etc.) are ignored. */
+static bool reader_open_audio_folder(const char *folder)
+{
+    DIR *directory = opendir(folder);
+    if (!directory) return false;
+    reader_playlist_count = 0;
+    bool has_documents = false;
+    struct dirent *entry;
+    while ((entry = readdir(directory))) {
+        if (entry->d_name[0] == '.') continue;
+        ReaderContentType type;
+        if (!reader_content_type(entry->d_name, &type)) continue;
+        if (type == READER_CONTENT_EPUB || type == READER_CONTENT_TEXT) {
+            has_documents = true;
+            continue;
+        }
+        if (reader_playlist_count == reader_playlist_capacity) {
+            size_t capacity = reader_playlist_capacity
+                ? reader_playlist_capacity * 2 : 16;
+            ReaderLibraryEntry *entries = heap_caps_realloc(
+                reader_playlist_entries, capacity * sizeof(*entries),
+                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            if (!entries) break;
+            reader_playlist_entries = entries;
+            reader_playlist_capacity = capacity;
+        }
+        ReaderLibraryEntry *item =
+            &reader_playlist_entries[reader_playlist_count++];
+        memset(item, 0, sizeof(*item));
+        strlcpy(item->name, entry->d_name, sizeof(item->name));
+        strlcpy(item->path, folder, sizeof(item->path));
+        strlcat(item->path, "/", sizeof(item->path));
+        if (strlcat(item->path, entry->d_name, sizeof(item->path))
+                >= sizeof(item->path)) {
+            --reader_playlist_count;
+            continue;
+        }
+        item->kind = LIBRARY_ENTRY_BOOK;
+    }
+    closedir(directory);
+    if (has_documents || !reader_playlist_count) {
+        reader_playlist_count = 0;
+        return false;
+    }
+    qsort(reader_playlist_entries, reader_playlist_count,
+          sizeof(*reader_playlist_entries), reader_playlist_compare);
+    strlcpy(reader_playlist_path, folder, sizeof(reader_playlist_path));
+    reader_playlist_active = true;
+    reader_playlist_index = 0;
+    reader_request_playlist_file(folder);
+    for (size_t i = 0; i < reader_playlist_count; ++i) {
+        if (!strcmp(reader_playlist_entries[i].path,
+                    reader_playlist_saved_file)) {
+            reader_playlist_index = i;
+            break;
+        }
+    }
+    ReaderContentType type;
+    if (!reader_content_type(reader_playlist_entries[reader_playlist_index].path,
+                             &type)) {
+        reader_playlist_active = false;
+        return false;
+    }
+    reader_open_media_path(reader_playlist_entries[reader_playlist_index].path,
+                           type, true);
+    return true;
+}
+
+static void reader_playlist_move(int direction)
+{
+    if (!reader_playlist_active || !reader_playlist_count) return;
+    size_t next = reader_playlist_index;
+    if (direction < 0 && next) --next;
+    else if (direction > 0 && next + 1 < reader_playlist_count) ++next;
+    if (next == reader_playlist_index) {
+        strlcpy(reader_announcement,
+                direction < 0 ? "first file" : "last file",
+                sizeof(reader_announcement));
+        queue_audio(AUDIO_SPEECH, reader_announcement);
+        return;
+    }
+    reader_save_media_position();
+    /* Position reads are deliberately performed by app_main's internal-RAM
+       task because NVS temporarily disables the external-RAM cache.  Mark
+       playback paused and invalidate the decoder before waiting for that
+       task; otherwise file navigation during playback can wait forever for
+       the very paused state that it has not yet entered. */
+    reader_media_paused = true;
+    reader_paused = true;
+    ++requested_generation;
+    reader_playlist_index = next;
+    ReaderContentType type;
+    if (reader_content_type(reader_playlist_entries[next].path, &type))
+        reader_open_media_path(reader_playlist_entries[next].path, type, true);
+}
+
 static void reader_remove_recent(const char *path)
 {
     for (size_t i = 0; i < READER_RECENT_MAX; ++i) {
@@ -3044,6 +3339,10 @@ static void reader_format_menu_item(void)
         snprintf(reader_announcement, sizeof(reader_announcement),
                  "book opening. %s",
                  reader_instant_opening ? "instant" : "indexed");
+    else if (item == READER_MENU_AUDIO_FOLDERS)
+        snprintf(reader_announcement, sizeof(reader_announcement),
+                 "audio folders as playlists. %s",
+                 reader_audio_folder_playlists ? "on" : "off");
     else if (item == READER_MENU_CLEAR_CACHE)
         strlcpy(reader_announcement, "clear book cache",
                 sizeof(reader_announcement));
@@ -3098,7 +3397,8 @@ static void reader_build_menu(void)
         READER_MENU_CLOCK, READER_MENU_LIBRARY_SORT,
         READER_MENU_SECTION_PAUSE, READER_MENU_STARTUP,
         READER_MENU_UNLOCK_ACTION, READER_MENU_RECENT_FILES,
-        READER_MENU_BOOK_OPENING, READER_MENU_STATUS,
+        READER_MENU_BOOK_OPENING, READER_MENU_AUDIO_FOLDERS,
+        READER_MENU_STATUS,
         READER_MENU_INTERFACE_SOUNDS,
         READER_MENU_SLEEP_KEY, READER_MENU_SLEEP_BOOT,
     };
@@ -3491,6 +3791,11 @@ static void reader_adjust_menu_item(int direction)
         reader_schedule_preferences_save();
         reader_speak_menu_item();
         break;
+    case READER_MENU_AUDIO_FOLDERS:
+        reader_audio_folder_playlists = !reader_audio_folder_playlists;
+        reader_schedule_preferences_save();
+        reader_speak_menu_item();
+        break;
     case READER_MENU_SLEEP_TIMER: reader_change_sleep_timer(direction); break;
     case READER_MENU_SLEEP_KEY: reader_toggle_sleep_key_reset(); break;
     case READER_MENU_SLEEP_BOOT: reader_toggle_sleep_start_on_boot(); break;
@@ -3561,10 +3866,11 @@ static void reader_save_manual_clock(void)
     struct timeval tv = { .tv_sec = value };
     reader_clock_editing = false;
     reader_clock_announcement_pending = false;
-    if (value > 0 && settimeofday(&tv, NULL) == 0)
+    if (value > 0 && settimeofday(&tv, NULL) == 0) {
+        rr_clock_retain_now();
         strlcpy(reader_announcement, "clock set",
                 sizeof(reader_announcement));
-    else
+    } else
         strlcpy(reader_announcement, "clock could not be set",
                 sizeof(reader_announcement));
     queue_audio(AUDIO_SPEECH, reader_announcement);
@@ -3826,6 +4132,73 @@ static void reader_close_menu(void)
     strlcpy(reader_announcement, reader_library ? "library" : "reading",
             sizeof(reader_announcement));
     queue_audio(AUDIO_SPEECH, reader_announcement);
+}
+
+typedef enum {
+    READER_SWITCH_NONE,
+    READER_SWITCH_MENU,
+    READER_SWITCH_SPEECH,
+    READER_SWITCH_STATUS,
+    READER_SWITCH_LIBRARY,
+    READER_SWITCH_READING,
+} ReaderInterfaceSwitch;
+
+static ReaderInterfaceSwitch reader_next_interface(ReaderInterfaceSwitch item)
+{
+    do {
+        item = item == READER_SWITCH_READING
+            ? READER_SWITCH_MENU : (ReaderInterfaceSwitch)(item + 1);
+    } while (item == READER_SWITCH_READING && !reader_selected_path[0]);
+    return item;
+}
+
+static ReaderInterfaceSwitch reader_current_interface(void)
+{
+    if (reader_speech_menu) return READER_SWITCH_SPEECH;
+    if (reader_status_menu) return READER_SWITCH_STATUS;
+    if (reader_menu) return READER_SWITCH_MENU;
+    if (reader_library) return READER_SWITCH_LIBRARY;
+    return READER_SWITCH_READING;
+}
+
+static void reader_announce_interface(ReaderInterfaceSwitch item)
+{
+    static const char *const names[] = {
+        "", "menu", "speech settings", "playing screen status items",
+        "library", "reading",
+    };
+    strlcpy(reader_announcement, names[item], sizeof(reader_announcement));
+    queue_audio(AUDIO_SPEECH, reader_announcement);
+    printf("INTERFACE_SWITCH preview=%s\n", names[item]);
+}
+
+static void reader_activate_interface(ReaderInterfaceSwitch item)
+{
+    reader_menu_announcement_pending = false;
+    reader_menu = item == READER_SWITCH_MENU || item == READER_SWITCH_SPEECH
+        || item == READER_SWITCH_STATUS;
+    reader_speech_menu = item == READER_SWITCH_SPEECH;
+    reader_status_menu = item == READER_SWITCH_STATUS;
+    if (reader_menu) {
+        reader_build_menu();
+        reader_menu_index = 0;
+        for (size_t i = 0; i < reader_menu_count; ++i) {
+            ReaderMenuItem wanted = item == READER_SWITCH_SPEECH
+                ? READER_MENU_SPEECH : item == READER_SWITCH_STATUS
+                    ? READER_MENU_STATUS : READER_MENU_SLEEP_TIMER;
+            if (reader_menu_items[i] == wanted) { reader_menu_index = i; break; }
+        }
+        if (reader_speech_menu) reader_speech_menu_index = 0;
+        if (reader_status_menu) reader_status_menu_index = 0;
+    }
+    if (item == READER_SWITCH_LIBRARY) {
+        reader_library = true;
+        reader_library_recent_view = false;
+        reader_refresh_library();
+    } else if (item == READER_SWITCH_READING) {
+        reader_library = false;
+    }
+    printf("INTERFACE_SWITCH landed=%d\n", (int)item);
 }
 
 static void reader_change_rate(int direction)
@@ -4366,8 +4739,9 @@ static void reader_button_scan_task(void *argument)
     bool left_hold_handled = false;
     TickType_t left_started = 0;
     bool up_hold_handled = false;
-    bool up_opened_menu = false;
     TickType_t up_started = 0;
+    bool down_hold_handled = false;
+    TickType_t down_started = 0;
     bool right_hold_handled = false;
     TickType_t right_started = 0;
     bool library_announcement_pending = false;
@@ -4376,6 +4750,9 @@ static void reader_button_scan_task(void *argument)
     ReaderFileDetail pending_file_detail = READER_FILE_DETAIL_SIZE;
     TickType_t file_detail_changed_at = 0;
     bool suppressed_press = false;
+    ReaderInterfaceSwitch interface_switch = READER_SWITCH_NONE;
+    bool interface_speech_started = false;
+    TickType_t interface_spoken_at = 0;
 
     for (;;) {
         int raw = 0;
@@ -4430,6 +4807,14 @@ static void reader_button_scan_task(void *argument)
                 vTaskDelay(pdMS_TO_TICKS(10));
                 continue;
             }
+            if (stable_key == 0 && previous_key == 2
+                && interface_switch != READER_SWITCH_NONE) {
+                reader_activate_interface(interface_switch);
+                interface_switch = READER_SWITCH_NONE;
+                up_hold_handled = true;
+                puts("INTERFACE_SWITCH released");
+                continue;
+            }
             if (stable_key != 0 && reader_sleep_timer_active
                 && reader_sleep_timer_reset_on_key) {
                 reader_arm_sleep_timer();
@@ -4474,14 +4859,9 @@ static void reader_button_scan_task(void *argument)
             } else if (stable_key == 2) {
                 up_started = xTaskGetTickCount();
                 up_hold_handled = false;
-                up_opened_menu = false;
-                if (!reader_library && !reader_menu && !reader_paused) {
-                    if (reader_volume < 10) reader_volume += 2;
-                    else if (reader_volume < 100) reader_volume += 5;
-                    if (reader_volume > 100) reader_volume = 100;
-                    reader_schedule_preferences_save();
-                    printf("READER volume_up=%d\n", reader_volume);
-                }
+            } else if (stable_key == 4) {
+                down_started = xTaskGetTickCount();
+                down_hold_handled = false;
             } else if (stable_key == 3) {
                 left_started = xTaskGetTickCount();
                 left_hold_handled = false;
@@ -4491,8 +4871,7 @@ static void reader_button_scan_task(void *argument)
                          && reader_text_navigation_mode
                                 == READER_TEXT_NAV_NARROW))
                     reader_sentence_seek = -1;
-            } else if (stable_key == 5
-                       && !reader_menu && !reader_library) {
+            } else if (stable_key == 5) {
                 right_started = xTaskGetTickCount();
                 right_hold_handled = false;
                 if (!reader_paused && !reader_library && !reader_menu
@@ -4501,7 +4880,13 @@ static void reader_button_scan_task(void *argument)
                          && reader_text_navigation_mode
                                 == READER_TEXT_NAV_NARROW))
                     reader_sentence_seek = 1;
-            } else if (stable_key == 0 && previous_key == 3
+            }
+            /* Hold bookkeeping above must not consume the press itself.
+               Down and Right perform their short-press actions on key-down,
+               whereas the other directions need release-time disambiguation.
+               Keeping both stages in one else-if chain made the bookkeeping
+               branch render the actual Down/Right handlers unreachable. */
+            if (stable_key == 0 && previous_key == 3
                        && !left_hold_handled && !locked) {
                 if (reader_menu) {
                     if (reader_speech_menu)
@@ -4572,6 +4957,13 @@ static void reader_button_scan_task(void *argument)
                     } else if (reader_plain_text_mode)
                         reader_cycle_plain_navigation();
                     else reader_cycle_navigation_mode();
+                }
+                else {
+                    if (reader_volume < 10) reader_volume += 2;
+                    else if (reader_volume < 100) reader_volume += 5;
+                    if (reader_volume > 100) reader_volume = 100;
+                    reader_schedule_preferences_save();
+                    printf("READER volume_up=%d\n", reader_volume);
                 }
             } else if (stable_key == 0 && previous_key == 1
                        && !centre_hold_handled && !locked) {
@@ -4654,6 +5046,9 @@ static void reader_button_scan_task(void *argument)
                             continue;
                         }
                         if (item->kind == LIBRARY_ENTRY_DIRECTORY) {
+                            if (reader_audio_folder_playlists
+                                && reader_open_audio_folder(item->path))
+                                continue;
                             strlcpy(reader_library_path, item->path,
                                     sizeof(reader_library_path));
                             reader_library_recent_view = false;
@@ -4665,38 +5060,9 @@ static void reader_button_scan_task(void *argument)
                         if (reader_content_type(item->path, &content_type)
                             && (content_type == READER_CONTENT_MP3
                                 || content_type == READER_CONTENT_M4B)) {
-                            const char *relative = !strncmp(item->path,
-                                    "/sdcard/", strlen("/sdcard/"))
-                                ? item->path + strlen("/sdcard/") : item->path;
-                            strlcpy(reader_pending_lastbook, relative,
-                                    sizeof(reader_pending_lastbook));
-                            reader_lastbook_save_requested = true;
-                            strlcpy(reader_selected_path, item->path,
-                                    sizeof(reader_selected_path));
-                            reader_add_recent(reader_selected_path);
-                            reader_media_mode = true;
-                            reader_media_type = content_type;
-                            reader_media_target_seconds = 0;
-                            reader_media_position_seconds = 0;
-                            reader_media_duration_seconds = 0;
-                            reader_media_paused = false;
-                            reader_media_finished = false;
-                            if (content_type == READER_CONTENT_M4B)
-                                reader_media_load_chapters(item->path);
-                            else {
-                                free(reader_media_chapters);
-                                reader_media_chapters = NULL;
-                                reader_media_chapter_count = 0;
-                                reader_media_jump_mode =
-                                    READER_MEDIA_JUMP_30_SECONDS;
-                                reader_media_search_step = 0;
-                            }
-                            reader_plain_text_mode = false;
-                            reader_library = false;
-                            reader_paused = false;
-                            reader_loaded = false;
-                            queue_audio(AUDIO_MEDIA_PLAY, NULL);
-                            puts("LIBRARY media open requested");
+                            reader_playlist_active = false;
+                            reader_open_media_path(item->path, content_type,
+                                                   true);
                             continue;
                         }
                         reader_media_mode = false;
@@ -4733,6 +5099,10 @@ static void reader_button_scan_task(void *argument)
                     }
                     reader_media_paused = !reader_media_paused;
                     reader_paused = reader_media_paused;
+                    if (reader_media_paused) {
+                        reader_save_media_position();
+                        reader_save_playlist_file();
+                    }
                     if (!reader_media_paused && !reader_media_running)
                         queue_audio(AUDIO_MEDIA_PLAY, NULL);
                     printf("MEDIA paused=%d running=%d\n",
@@ -4847,6 +5217,28 @@ static void reader_button_scan_task(void *argument)
         /* A key used to stop recording is consumed through its release.
            Otherwise these continuously evaluated hold paths can act on it
            even though the edge handler above marked the press suppressed. */
+        /* Both nested settings screens use the same escape gesture: holding
+           any direction other than Up, or Centre, returns to the main menu.
+           Up is reserved for the global interface cycler below. */
+        if (!suppressed_press && reader_menu
+            && (reader_speech_menu || reader_status_menu) && stable_key
+            && ((stable_key == 1 && !centre_hold_handled
+                 && xTaskGetTickCount() - centre_started >= pdMS_TO_TICKS(1200))
+                || (stable_key == 3 && !left_hold_handled
+                    && xTaskGetTickCount() - left_started >= pdMS_TO_TICKS(1200))
+                || (stable_key == 4 && !down_hold_handled
+                    && xTaskGetTickCount() - down_started >= pdMS_TO_TICKS(1200))
+                || (stable_key == 5 && !right_hold_handled
+                    && xTaskGetTickCount() - right_started >= pdMS_TO_TICKS(1200)))) {
+            centre_hold_handled = stable_key == 1;
+            up_hold_handled = stable_key == 2;
+            left_hold_handled = stable_key == 3;
+            down_hold_handled = stable_key == 4;
+            right_hold_handled = stable_key == 5;
+            if (reader_speech_menu) reader_close_speech_menu();
+            else reader_close_status_menu();
+            printf("SETTINGS_SUBMENU closed by hold key=%d\n", stable_key);
+        }
         if (!suppressed_press && stable_key == 1 && !centre_hold_handled
             && xTaskGetTickCount() - centre_started >= pdMS_TO_TICKS(1200)) {
             locked = !locked;
@@ -4884,23 +5276,18 @@ static void reader_button_scan_task(void *argument)
         if (!suppressed_press && stable_key == 2 && !up_hold_handled
             && xTaskGetTickCount() - up_started >= pdMS_TO_TICKS(1200)) {
             up_hold_handled = true;
-            if (reader_menu && !up_opened_menu) {
-                if (reader_speech_menu) {
-                    reader_close_speech_menu();
-                    puts("SPEECH_MENU closed by hold up");
-                } else if (reader_status_menu) {
-                    reader_close_status_menu();
-                    puts("STATUS_MENU closed by hold up");
-                } else {
-                    reader_close_menu();
-                    puts("MENU closed by hold up");
-                }
-            } else if (!reader_menu && (reader_library || reader_paused)) {
-                library_announcement_pending = false;
-                reader_open_menu();
-                up_opened_menu = true;
-                puts("MENU opened by hold up");
+            library_announcement_pending = false;
+            if (!reader_paused && !reader_library) {
+                reader_paused = true;
+                reader_render_stop_requested = true;
+                reader_save_position();
+                ++requested_generation;
             }
+            interface_switch = reader_next_interface(
+                reader_current_interface());
+            interface_speech_started = false;
+            interface_spoken_at = 0;
+            reader_announce_interface(interface_switch);
         }
         if (!suppressed_press && stable_key == 3 && !left_hold_handled && !locked
             && reader_menu && reader_status_menu
@@ -4908,6 +5295,19 @@ static void reader_button_scan_task(void *argument)
             left_hold_handled = true;
             reader_close_status_menu();
             puts("STATUS_MENU closed by hold left");
+        }
+        if (interface_switch != READER_SWITCH_NONE && stable_key == 2) {
+            if (reader_ui_busy) interface_speech_started = true;
+            else if (interface_speech_started) {
+                interface_speech_started = false;
+                interface_spoken_at = xTaskGetTickCount();
+            } else if (interface_spoken_at
+                       && xTaskGetTickCount() - interface_spoken_at
+                              >= pdMS_TO_TICKS(500)) {
+                interface_switch = reader_next_interface(interface_switch);
+                interface_spoken_at = 0;
+                reader_announce_interface(interface_switch);
+            }
         }
         if (!suppressed_press && stable_key == 3 && !left_hold_handled && !locked
             && !reader_menu
@@ -5113,10 +5513,24 @@ static speech_engine_t *reader_create_engine(void)
                 speech_engine_destroy(instance);
                 return NULL;
             }
-        } else if (speech_engine_get(instance, info.id, &value)) {
+        } else {
+            /* Some engines expose historical native defaults outside the
+               range advertised to Retroreader (OpenEVV reports rate 50 and
+               volume 92).  They are valid engine internals, but accepting
+               them after a clean full-image flash makes the UI extremely
+               slow and bypasses our documented defaults.  Keep a native
+               value only when it is valid; otherwise apply the adapter's
+               declared default to both the profile and the engine. */
+            if (!speech_engine_get(instance, info.id, &value)
+                || value < info.minimum || value > info.maximum)
+                value = info.default_value;
+            if (!speech_engine_set(instance, info.id, value)) {
+                speech_engine_destroy(instance);
+                return NULL;
+            }
             reader_speech_values[info.id] = value;
             reader_speech_saved |= 1U << info.id;
-        } else reader_speech_values[info.id] = info.default_value;
+        }
     }
     reader_rate = reader_speech_values[SPEECH_SETTING_RATE];
     reader_dictionary_annotations = reader_substitution_count
@@ -5558,10 +5972,35 @@ static bool reader_play_media(uint32_t generation)
         } while (raw.len && okay && generation == requested_generation);
         if (!okay || got < 2048) break;
     }
+    bool advance_playlist = false;
     if (generation == requested_generation && okay) {
         reader_media_finished = true;
         reader_media_paused = true;
         puts("MEDIA_COMPLETE");
+        if (reader_playlist_active
+            && reader_playlist_index + 1 < reader_playlist_count) {
+            /* A completed track starts from zero next time. */
+            reader_media_position_seconds = 0;
+            reader_save_media_position();
+            ++reader_playlist_index;
+            ReaderContentType next_type;
+            if (reader_content_type(
+                    reader_playlist_entries[reader_playlist_index].path,
+                    &next_type)) {
+                strlcpy(reader_selected_path,
+                        reader_playlist_entries[reader_playlist_index].path,
+                        sizeof(reader_selected_path));
+                reader_media_type = next_type;
+                reader_media_target_seconds = 0;
+                reader_media_position_seconds = 0;
+                reader_media_duration_seconds = 0;
+                reader_media_finished = false;
+                reader_media_paused = false;
+                reader_paused = false;
+                reader_save_playlist_file();
+                advance_playlist = true;
+            }
+        }
     }
     reader_media_restore_speech_clock();
     esp_audio_simple_dec_close(decoder);
@@ -5569,6 +6008,18 @@ static bool reader_play_media(uint32_t generation)
     free(input);
     free(output);
     reader_media_running = false;
+    if (advance_playlist) {
+        if (reader_media_type == READER_CONTENT_M4B)
+            reader_media_load_chapters(reader_selected_path);
+        else {
+            free(reader_media_chapters);
+            reader_media_chapters = NULL;
+            reader_media_chapter_count = 0;
+            reader_media_jump_mode = READER_MEDIA_JUMP_FILE;
+        }
+        queue_audio(AUDIO_MEDIA_PLAY, NULL);
+        puts("PLAYLIST advancing to next file");
+    }
     return okay;
 }
 
@@ -5972,10 +6423,40 @@ static bool reader_resume_last_book(void)
     ReaderContentType content_type;
     if (stat(reader_selected_path, &details) != 0
         || !S_ISREG(details.st_mode)
-        || !reader_content_type(reader_selected_path, &content_type)
-        || (content_type != READER_CONTENT_EPUB
-            && content_type != READER_CONTENT_TEXT))
+        || !reader_content_type(reader_selected_path, &content_type))
         return false;
+    if (content_type == READER_CONTENT_MP3
+        || content_type == READER_CONTENT_M4B) {
+        uint32_t unused_section = 0;
+        uint32_t saved_seconds = 0;
+        reader_read_saved_section_nvs(reader_selected_path, &unused_section,
+                                      &saved_seconds);
+        reader_playlist_active = false;
+        reader_media_mode = true;
+        reader_media_type = content_type;
+        reader_media_target_seconds = saved_seconds;
+        reader_media_position_seconds = saved_seconds;
+        reader_media_duration_seconds = 0;
+        reader_media_paused = false;
+        reader_media_finished = false;
+        if (content_type == READER_CONTENT_M4B)
+            reader_media_load_chapters(reader_selected_path);
+        else {
+            free(reader_media_chapters);
+            reader_media_chapters = NULL;
+            reader_media_chapter_count = 0;
+            reader_media_jump_mode = READER_MEDIA_JUMP_30_SECONDS;
+        }
+        reader_plain_text_mode = false;
+        reader_library = false;
+        reader_paused = false;
+        reader_loaded = false;
+        reader_add_recent(reader_selected_path);
+        queue_audio(AUDIO_MEDIA_PLAY, NULL);
+        printf("STARTUP resuming audio at %u seconds\n",
+               (unsigned)saved_seconds);
+        return true;
+    }
     reader_media_mode = false;
     reader_plain_text_mode = content_type == READER_CONTENT_TEXT;
     reader_text_navigation_mode = READER_TEXT_NAV_SENTENCE;
@@ -5998,6 +6479,10 @@ void app_main(void)
 {
     int64_t boot_started_us = esp_timer_get_time();
     reader_configure_timezone();
+    bool clock_restored = rr_clock_restore();
+    printf("CLOCK retained=%s epoch=%lld\n",
+           clock_restored ? "restored" : "unavailable",
+           (long long)time(NULL));
     if (REG_READ(RTC_CNTL_STORE0_REG) == BOOT_REQUEST_TRANSFER) {
         /* Leave the one-shot request intact for the network partition to
            consume.  Its absence on a later reset is how that partition now
@@ -6133,7 +6618,13 @@ void app_main(void)
     }
     printf("BOOT_STAGE request_ms=%u\n",
            (unsigned)((esp_timer_get_time() - boot_started_us) / 1000));
+    TickType_t clock_retained_at = 0;
     for (;;) {
+        TickType_t now_ticks = xTaskGetTickCount();
+        if (now_ticks - clock_retained_at >= pdMS_TO_TICKS(1000)) {
+            rr_clock_retain_now();
+            clock_retained_at = now_ticks;
+        }
         if (reader_position_read_requested && reader_paused
             && !reader_rendering && !reader_play_task_running
             && !reader_ui_busy) {
@@ -6143,9 +6634,22 @@ void app_main(void)
             reader_position_read_requested = false;
             reader_position_read_done = true;
         }
+        if (reader_playlist_read_requested && reader_paused
+            && !reader_rendering && !reader_play_task_running
+            && !reader_ui_busy) {
+            char key[16];
+            reader_playlist_key_for(reader_pending_playlist_folder, key);
+            size_t size = sizeof(reader_playlist_saved_file);
+            if (nvs_get_str(reader_prefs, key, reader_playlist_saved_file,
+                            &size) != ESP_OK)
+                reader_playlist_saved_file[0] = 0;
+            reader_playlist_read_requested = false;
+            reader_playlist_read_done = true;
+        }
         if ((reader_preferences_save_requested
              || reader_position_save_requested
-             || reader_lastbook_save_requested)
+             || reader_lastbook_save_requested
+             || reader_playlist_save_requested)
             && reader_paused && !reader_rendering
             && !reader_play_task_running && !reader_ui_busy)
             reader_flush_pending_nvs();

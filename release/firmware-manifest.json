@@ -1,5 +1,5 @@
 {
-  "version": "2026.10.17",
+  "version": "2026.10.18",
   "variants": [
     {"id":"openevv-en-US","engine":"OpenEVV","label":"US English","image":"RetroReader-openevv-en-US.bin","sample":"audio/openevv.mp3","cmake":["RR_SPEECH_ENGINE=openevv","EVV_LANGUAGE=enus"],"default":true},
     {"id":"openevv-en-GB","engine":"OpenEVV","label":"British English","image":"RetroReader-openevv-en-GB.bin","sample":"audio/openevv-en-GB.mp3","cmake":["RR_SPEECH_ENGINE=openevv","EVV_LANGUAGE=engb"]},

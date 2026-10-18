@@ -25,8 +25,10 @@
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "esp_sntp.h"
+#include "clock_retention.h"
 #include "speech_engine.h"
 #include "transfer_mode.h"
+#include "transfer_web.h"
 #include "remsound_receiver.h"
 
 #ifndef TRANSFER_WIFI_SSID
@@ -49,6 +51,13 @@
 #define REMOTE_PREFILL_PASSAGE_SAMPLES 12288
 #define BOOT_STATE_NAMESPACE "rr_boot"
 #define REMSOUND_HANDOFF_KEY "remsound"
+
+static void network_clock_synced(struct timeval *value)
+{
+    (void)value;
+    rr_clock_retain_now();
+    puts("CLOCK synchronised and retained");
+}
 static int16_t *stereo;
 static unsigned engine_sample_rate = 11025;
 static i2s_chan_handle_t audio;
@@ -120,6 +129,7 @@ static bool take_remsound_handoff(void)
 
 typedef struct {
     char *text;
+    bool annotated;
 } remote_speech_t;
 
 typedef struct {
@@ -374,6 +384,22 @@ static void remote_queue_copy(const char *text)
     memcpy(copy, text, length);
     remote_speech_t item = { .text = copy };
     if (xQueueSend(remote_speech, &item, 0) != pdTRUE) free(copy);
+}
+
+static bool web_preview_queue(const char *text, void *context)
+{
+    (void)context;
+    size_t length = strlen(text) + 1;
+    char *copy = heap_caps_malloc(length,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!copy) return false;
+    memcpy(copy, text, length);
+    remote_speech_t item = { .text = copy, .annotated = true };
+    if (xQueueSend(remote_speech, &item, 0) != pdTRUE) {
+        free(copy);
+        return false;
+    }
+    return true;
 }
 
 static void remote_clear_queue(void)
@@ -676,9 +702,10 @@ static void remote_network_task(void *arg)
         remote_task_running = false; vTaskDeleteWithCaps(NULL); return;
     }
     /* Certificate validation needs a plausible wall clock. */
-    if (time(NULL) < 1704067200 && !esp_sntp_enabled()) {
+    if (!esp_sntp_enabled()) {
         esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
         esp_sntp_setservername(0, "pool.ntp.org");
+        esp_sntp_set_time_sync_notification_cb(network_clock_synced);
         esp_sntp_init();
     }
     for (int i = 0; i < 50 && time(NULL) < 1704067200; ++i)
@@ -921,6 +948,7 @@ void app_main(void)
     start_button_scanner(&buttons);
     remote_speech = xQueueCreate(8, sizeof(remote_speech_t));
     ESP_ERROR_CHECK(remote_speech ? ESP_OK : ESP_ERR_NO_MEM);
+    transfer_web_configure(speech_engine_storage_id(), web_preview_queue, NULL);
 
     transfer_mode_status_t status = { 0 };
     esp_err_t result = is_remote_mode
@@ -989,7 +1017,10 @@ void app_main(void)
             remote_speech_t item;
             if (xQueueReceive(remote_speech, &item, pdMS_TO_TICKS(1))
                     == pdTRUE) {
+                (void)speech_engine_set(voice, SPEECH_SETTING_ANNOTATED_INPUT,
+                                        item.annotated ? 1 : 0);
                 speak(voice, item.text);
+                (void)speech_engine_set(voice, SPEECH_SETTING_ANNOTATED_INPUT, 0);
                 free(item.text);
             }
             int key;
@@ -1026,8 +1057,17 @@ void app_main(void)
         play_announcement();
     transfer_ready = true;
     for (;;) {
+        remote_speech_t preview;
+        if (xQueueReceive(remote_speech, &preview, pdMS_TO_TICKS(20))
+                == pdTRUE) {
+            (void)speech_engine_set(voice, SPEECH_SETTING_ANNOTATED_INPUT,
+                                    preview.annotated ? 1 : 0);
+            speak(voice, preview.text);
+            (void)speech_engine_set(voice, SPEECH_SETTING_ANNOTATED_INPUT, 0);
+            free(preview.text);
+        }
         int key;
-        if (xQueueReceive(presses, &key, portMAX_DELAY) == pdTRUE) {
+        if (xQueueReceive(presses, &key, 0) == pdTRUE) {
             if (key == 0x101) {
                 transfer_ready = false;
                 speak(voice, "leaving file transfer");

@@ -140,7 +140,10 @@ extern "C" bool speech_engine_synthesize(speech_engine_t *opaque, const char *te
     size_t output = static_cast<size_t>(prefix_length);
     for (size_t i = 0; i < text_length; ++i) {
         unsigned char c = static_cast<unsigned char>(text[i]);
-        utterance[output++] = (c >= 0x20 && c <= 0x7e) ? static_cast<char>(c) : ' ';
+        /* Ctrl-A is DoubleTalk's command introducer.  It can be written as
+         * \\x01 in an engine-specific substitutions file. */
+        utterance[output++] = (c == 0x01 || (c >= 0x20 && c <= 0x7e))
+            ? static_cast<char>(c) : ' ';
     }
     utterance[output++] = '\r';
 
@@ -259,7 +262,7 @@ extern "C" bool speech_engine_get(speech_engine_t *opaque,
     case SPEECH_SETTING_TONE: *value = engine->tone; return true;
     case SPEECH_SETTING_ARTICULATION: *value = engine->articulation; return true;
     case SPEECH_SETTING_EXPRESSION: *value = engine->expression; return true;
-    case SPEECH_SETTING_ANNOTATED_INPUT: *value = 0; return true;
+    case SPEECH_SETTING_ANNOTATED_INPUT: *value = 1; return true;
     default: return false;
     }
 }
@@ -267,5 +270,5 @@ extern "C" bool speech_engine_get(speech_engine_t *opaque,
 extern "C" bool speech_engine_supports_annotations(const speech_engine_t *engine)
 {
     (void)engine;
-    return false;
+    return true;
 }

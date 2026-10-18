@@ -1,0 +1,3 @@
+# Rename this file to substitutions.openevv.tsv for OpenEVV-only replacements.
+# OpenEVV SPR and backquote annotations may be used in the replacement column.
+though	`[.1Do]

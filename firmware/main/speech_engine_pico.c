@@ -266,5 +266,7 @@ bool speech_engine_get(speech_engine_t *engine, speech_setting_id_t setting,
 bool speech_engine_supports_annotations(const speech_engine_t *engine)
 {
     (void)engine;
-    return false;
+    /* Pico's native text stream accepts its compact <phoneme ph='...'/>
+       X-SAMPA markup. */
+    return true;
 }

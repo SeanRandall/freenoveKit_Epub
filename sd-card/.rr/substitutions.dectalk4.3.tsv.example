@@ -1,0 +1,3 @@
+# Rename this file to substitutions.dectalk4.3.tsv for DECtalk 4.3 replacements.
+# ARPAbet and bracketed inline commands may be used in the replacement column.
+hello	[h'Elo]

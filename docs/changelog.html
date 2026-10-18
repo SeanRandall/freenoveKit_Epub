@@ -13,22 +13,27 @@
 <h1>Retroreader changelog</h1>
 <p>Retroreader remains alpha software. Releases may change settings, storage
 layouts and behaviour without preserving compatibility with earlier builds.</p>
+<h2>2026.10.18 — pre-release</h2>
+<ul>
+<li>Resume MP3 and M4B playback from the saved listening position.</li>
+<li>Add an optional audio-folder playlist mode. Pure audio folders can be opened
+  as books, resume at the last file and position, and expose file navigation;
+  folders containing EPUB or text documents remain ordinary library folders.</li>
+<li>Add a hold-Up interface switcher for moving among the menu, speech settings,
+  playing-screen status items, library and the current document. Holding any
+  other key leaves either settings submenu.</li>
+<li>Retain the most recently known clock value over software restarts and restore
+  accurate network time whenever Wi-Fi is available.</li>
+<li>Support a global pronunciation-substitution file plus an overriding
+  engine-specific TSV file for each installed speech engine.</li>
+<li>Add accessible browser editors for pronunciation substitutions and reader
+  settings alongside wireless SD-card management.</li>
+<li>Correct directional-key handling and improve rapid interface navigation.</li>
+</ul>
 <h2>2026.10.17 — pre-release</h2>
 <ul>
-<li>Add the British Dolphin Apollo II speech synthesizer, reconstructed from the
-  original hardware firmware and rendered natively on the ESP32-S3.</li>
-<li>Provide Apollo controls for rate, voice volume, pitch, its male and non-male
-  speaker tables, and expression. The original Apollo deliberately reduces
-  expression at faster rates.</li>
-<li>Stream Apollo speech as it is synthesized for responsive, interruptible
-  menus and reading, while yielding regularly to the reader interface.</li>
-<li>Fix a crash when moving through engine-specific voice settings.</li>
-<li>Add Apollo to the web installer, downloadable firmware, voice samples and
-  source-provenance information.</li>
-<li>Add the 1988 Speech Plus Prose 2000 v3.4.1 US English synthesizer, with
-  rate, voice volume, pitch and three voice-character controls.</li>
-<li>Add Prose 2000 to the web installer, downloadable firmware, voice samples
-  and source-provenance information.</li>
+<li>Add the British Dolphin Apollo II speech synthesizer.</li>
+<li>Add the Speech Plus Prose 2000 v3.4.1 US English speech synthesizer.</li>
 </ul>
 <h2>2026.10.16 — pre-release</h2>
 <p>This is the first date-numbered Retroreader release and a substantial change

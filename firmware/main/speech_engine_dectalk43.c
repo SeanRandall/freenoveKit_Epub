@@ -22,6 +22,7 @@ struct speech_engine {
     uint64_t delivered_samples;
     int rate;
     int voice;
+    bool phoneme_input;
     uint32_t pending_marker;
     bool have_marker;
     volatile bool busy;
@@ -164,15 +165,21 @@ unsigned speech_engine_sample_rate(const speech_engine_t *engine)
 bool speech_engine_synthesize(speech_engine_t *engine, const char *text)
 {
     if (!engine || !text) return false;
-    size_t extra = engine->have_marker ? 40 : 1;
+    static const char phoneme_mode[] = "[:phoneme arpabet speak on]";
+    size_t extra = (engine->have_marker ? 40 : 1)
+        + (engine->phoneme_input ? sizeof(phoneme_mode) - 1 : 0);
     char *input = malloc(strlen(text) + extra);
     if (!input) return false;
+    input[0] = 0;
+    if (engine->phoneme_input) strcat(input, phoneme_mode);
     if (engine->have_marker) {
-        snprintf(input, strlen(text) + extra, "[:index mark %lu]%s",
+        size_t used = strlen(input);
+        snprintf(input + used, strlen(text) + extra - used,
+                 "[:index mark %lu]%s",
                  (unsigned long)engine->pending_marker, text);
         engine->have_marker = false;
     } else {
-        strcpy(input, text);
+        strcat(input, text);
     }
     engine->busy = true;
     engine->abort_requested = false;
@@ -234,7 +241,10 @@ bool speech_engine_set(speech_engine_t *engine, speech_setting_id_t setting,
         return TextToSpeechSetSpeaker(engine->handle, (SPEAKER_T)(value - 1))
                == MMSYSERR_NOERROR;
     }
-    if (setting == SPEECH_SETTING_ANNOTATED_INPUT) return true;
+    if (setting == SPEECH_SETTING_ANNOTATED_INPUT) {
+        engine->phoneme_input = value != 0;
+        return true;
+    }
     return false;
 }
 bool speech_engine_get(speech_engine_t *engine, speech_setting_id_t setting,
@@ -243,7 +253,9 @@ bool speech_engine_get(speech_engine_t *engine, speech_setting_id_t setting,
     if (!engine || !value) return false;
     if (setting == SPEECH_SETTING_RATE) { *value = engine->rate; return true; }
     if (setting == SPEECH_SETTING_VOICE) { *value = engine->voice; return true; }
-    if (setting == SPEECH_SETTING_ANNOTATED_INPUT) { *value = 1; return true; }
+    if (setting == SPEECH_SETTING_ANNOTATED_INPUT) {
+        *value = engine->phoneme_input; return true;
+    }
     return false;
 }
 bool speech_engine_supports_annotations(const speech_engine_t *engine)

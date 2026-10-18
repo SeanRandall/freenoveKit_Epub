@@ -229,5 +229,7 @@ bool speech_engine_get(speech_engine_t *engine, speech_setting_id_t id, int *val
 bool speech_engine_supports_annotations(const speech_engine_t *engine)
 {
     (void)engine;
-    return false;
+    /* Engine-specific TSV replacements may use \\e[...] escape commands,
+       including Prose's phoneme-input mode. */
+    return true;
 }

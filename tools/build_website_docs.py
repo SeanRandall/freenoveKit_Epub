@@ -12,6 +12,7 @@ PAGES = {
     "preparing-the-sd-card.md": ("Preparing the SD card", "preparing-the-sd-card.html"),
     "wireless-file-transfer.md": ("Wireless file transfer", "wireless-file-transfer.html"),
     "using-the-reader.md": ("Using the reader", "using-the-reader.html"),
+    "substitutions.md": ("Pronunciation substitutions", "substitutions.html"),
     "changelog.md": ("Changelog", "changelog.html"),
 }
 
