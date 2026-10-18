@@ -5,6 +5,7 @@ layouts and behaviour without preserving compatibility with earlier builds.
 
 ## 2026.10.18 — pre-release
 
+- Add the RSynth English Klatt-formant speech synthesizer.
 - Resume MP3 and M4B playback from the saved listening position.
 - Add an optional audio-folder playlist mode. Pure audio folders can be opened
   as books, resume at the last file and position, and expose file navigation;

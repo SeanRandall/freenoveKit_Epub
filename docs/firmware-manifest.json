@@ -12,6 +12,7 @@
     {"id":"truvoice-en-US","engine":"TruVoice","label":"US English","image":"RetroReader-truvoice-en-US.bin","sample":"audio/truvoice.mp3","cmake":["RR_SPEECH_ENGINE=truvoice"]},
     {"id":"doubletalk-hybrid-en-US","engine":"DoubleTalk Hybrid — experimental","label":"US English","image":"RetroReader-doubletalk-hybrid-en-US.bin","sample":"audio/doubletalk-hybrid.mp3","cmake":["RR_SPEECH_ENGINE=doubletalk"]},
     {"id":"apollo2-en-GB","engine":"Dolphin Apollo II","label":"British English","image":"RetroReader-apollo2-en-GB.bin","sample":"audio/apollo2.mp3","cmake":["RR_SPEECH_ENGINE=apollo2"]},
-    {"id":"prose2000-1988-en-US","engine":"Speech Plus Prose 2000","label":"1988 US English","image":"RetroReader-prose2000-1988-en-US.bin","sample":"audio/prose2000.mp3","cmake":["RR_SPEECH_ENGINE=prose1988"]}
+    {"id":"prose2000-1988-en-US","engine":"Speech Plus Prose 2000","label":"1988 US English","image":"RetroReader-prose2000-1988-en-US.bin","sample":"audio/prose2000.mp3","cmake":["RR_SPEECH_ENGINE=prose1988"]},
+    {"id":"rsynth-en","engine":"RSynth","label":"English","image":"RetroReader-rsynth-en.bin","sample":"audio/rsynth.mp3","cmake":["RR_SPEECH_ENGINE=rsynth"]}
   ]
 }
