@@ -667,10 +667,16 @@ static bool speak(speech_engine_t *instance, const char *text,
         return false;
     }
 
+    /* Wait for sound, not just an idle engine: an engine may not report busy
+       until it has started. A newer keypress, though, makes on_speech_pcm()
+       refuse every sample, so speech cancelled before its first sample never
+       produces any. Waiting for sound then held the reader silent for the
+       whole ten seconds after quick presses; stop once the engine is idle. */
     TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(10000);
     while (xTaskGetTickCount() < deadline) {
         int speaking = speech_engine_busy(instance);
-        if (speech_samples > 0 && !speaking)
+        if (!speaking && (speech_samples > 0
+                          || generation != requested_generation))
             break;
         vTaskDelay(pdMS_TO_TICKS(1));
     }
