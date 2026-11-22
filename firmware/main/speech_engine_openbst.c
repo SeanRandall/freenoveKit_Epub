@@ -22,6 +22,7 @@ struct speech_engine {
     int top;
     int level;
     int voice;
+    int volume;
     bool busy;
     bool abort;
     bool marker_pending;
@@ -30,6 +31,10 @@ struct speech_engine {
 
 static const speech_setting_info_t settings[] = {
     { SPEECH_SETTING_RATE, "speaking rate", 60, 140, 5, 100, false,
+      NULL, NULL },
+    /* OpenBST has no volume of its own and is loud next to the other
+       engines; the adapter scales its samples. */
+    { SPEECH_SETTING_ENGINE_VOLUME, "voice volume", 0, 100, 5, 70, false,
       NULL, NULL },
     { SPEECH_SETTING_VOICE, "voice", 1, 6, 1, 1, false, NULL, NULL },
     { SPEECH_SETTING_PITCH, "pitch", 40, 120, 5, 80, false, NULL, NULL },
@@ -74,6 +79,7 @@ speech_engine_t *speech_engine_create(const speech_engine_config_t *config)
     engine->top = 160;
     engine->level = 6;
     engine->voice = 1;
+    engine->volume = 70;
     engine->instance = bst_open(OPENBST_BUILD_NAME);
     if (!engine->instance) {
         free(engine);
@@ -129,8 +135,15 @@ static int openbst_sink(const int16_t *pcm, long n, void *context)
         engine->config.marker(engine->pending_marker, engine->config.context);
         engine->marker_pending = false;
     }
+    const int16_t *out = pcm;
+    int16_t scaled[256]; /* a piece is at most BST_PCM_COUNT, 256, samples */
+    if (engine->volume != 100 && n <= (long)(sizeof(scaled) / sizeof(scaled[0]))) {
+        for (long i = 0; i < n; ++i)
+            scaled[i] = (int16_t)((int32_t)pcm[i] * engine->volume / 100);
+        out = scaled;
+    }
     if (engine->abort
-        || !engine->config.pcm(pcm, (size_t)n, engine->config.context)) {
+        || !engine->config.pcm(out, (size_t)n, engine->config.context)) {
         stream->stopped = true;
         return 0;
     }
@@ -187,6 +200,11 @@ bool speech_engine_set(speech_engine_t *engine, speech_setting_id_t setting,
 {
     if (!engine) return false;
     switch (setting) {
+    case SPEECH_SETTING_ENGINE_VOLUME:
+        /* Applied to each sample as it is passed on; nothing to tell BST. */
+        if (value < 0 || value > 100) return false;
+        engine->volume = value;
+        return true;
     case SPEECH_SETTING_RATE: engine->rate = value; break;
     case SPEECH_SETTING_VOICE: engine->voice = value; break;
     case SPEECH_SETTING_PITCH: engine->pitch = value; break;
@@ -204,6 +222,7 @@ bool speech_engine_get(speech_engine_t *engine, speech_setting_id_t setting,
 {
     if (!engine || !value) return false;
     switch (setting) {
+    case SPEECH_SETTING_ENGINE_VOLUME: *value = engine->volume; return true;
     case SPEECH_SETTING_RATE: *value = engine->rate; return true;
     case SPEECH_SETTING_VOICE: *value = engine->voice; return true;
     case SPEECH_SETTING_PITCH: *value = engine->pitch; return true;
