@@ -199,6 +199,16 @@ bool speech_engine_synthesize(speech_engine_t *engine, const char *text)
             }
         } while (status == PICO_STEP_BUSY);
     }
+    /* Pico keeps unread text and sound in its own buffers.  After an
+       interruption they would play at the start of the next utterance (heard
+       as phrases queueing up instead of being cut off), and repeated
+       interruptions could leave the engine refusing text altogether.  Reset
+       it whenever an utterance stops early.  A soft reset flushes those
+       buffers but leaves a few milliseconds of the old phrase in the signal
+       generator, heard as a short burst before the next one; the full reset
+       clears that too. */
+    if (!ok || engine->abort)
+        (void)pico_resetEngine(engine->instance, PICO_RESET_FULL);
     free(wrapped);
     engine->busy = false;
     return ok;
