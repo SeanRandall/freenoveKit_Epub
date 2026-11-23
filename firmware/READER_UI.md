@@ -82,13 +82,22 @@ The available announcement fields are:
   the cell voltage on GPIO20, smoothed over about two minutes, and a curve of
   running time left at each voltage. The percentage is spoken to the nearest
   five; the time to the nearest 10 minutes above an hour and 5 minutes above
-  10 minutes. Near the end it says "battery almost empty". The board has no
-  USB-sense or charge-status line, so a rise of 40 mV or more over three
-  minutes is spoken as "battery charging", and 4.25 V or more, where the
-  charger holds the voltage or the battery is switched off, as "battery on
-  charger". The curve starts from a measured 702035 discharge and is
-  re-learned from the battery log after each discharge that runs until the
-  reader loses power, and kept in NVS.
+  10 minutes. Near the end it says "battery almost empty". The curve starts
+  from a measured 702035 discharge and is re-learned from the battery log
+  after each discharge that runs until the reader loses power, and kept in
+  NVS.
+  The board has no USB-sense or charge-status line, so battery_charge.c
+  follows a charge from the voltage alone: the climb while the charger feeds
+  a steady current, then the hold at about 4.3 V while the current fades.
+  While it follows one, the field says "battery charging, about 40 percent,
+  about 50 minutes to full". "Battery charge estimating" covers the minute
+  after the charger goes on and the first minutes after start-up; "battery
+  charging" a charge it cannot place; and "battery on charger" a reading at
+  the charger's hold with no charge to follow, such as a start on the
+  charger or the battery switched off. The charging figures are re-learned
+  from each charge that finishes. Unplugging restarts the reader, so at
+  start-up the log's last session is followed again, and a charge it ended
+  part-way through caps the level until the voltage settles.
 - Current document title, reading percentage and selected navigation unit.
 
 The default sequence contains only:
