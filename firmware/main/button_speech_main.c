@@ -525,6 +525,27 @@ static void on_speech_marker(uint32_t marker, void *context)
 #endif
 }
 
+/* The TX DMA ring: about 140 ms of sound at 11025 Hz. */
+#define I2S_DMA_DESCRIPTORS 6
+#define I2S_DMA_FRAMES 256
+#define I2S_DMA_RING_BYTES \
+    (I2S_DMA_DESCRIPTORS * I2S_DMA_FRAMES * 2 * sizeof(int16_t))
+static const int16_t i2s_silence[FRAME_SAMPLES * 2];
+#ifdef PARAGRAPH_READER_MODE
+/* Set by speak() when the channel is stopped: on_speech_pcm() starts it with
+   the first speech already in the ring, rather than behind a ring of
+   silence, which delayed every spoken item by about 140 ms. */
+static bool reader_speech_start_pending;
+
+/* Speech cancelled before its first sound never starts the channel. */
+static void reader_stop_channel(void)
+{
+    if (reader_audio_active)
+        (void)i2s_channel_disable(tx_channel);
+    reader_audio_active = false;
+}
+#endif
+
 static bool on_speech_pcm(const int16_t *pcm, size_t count, void *context)
 {
     (void)context;
@@ -583,18 +604,41 @@ static bool on_speech_pcm(const int16_t *pcm, size_t count, void *context)
         stereo_frame[i * 2 + 1] = pcm[i];
 #endif
     }
+    const uint8_t *bytes = (const uint8_t *)stereo_frame;
+    size_t total = count * 2 * sizeof(int16_t);
 #ifdef PARAGRAPH_READER_MODE
     reader_mix_keypress(stereo_frame, count);
+    if (reader_speech_start_pending) {
+        /* A stopped channel keeps its old DMA descriptors, so the whole ring
+           must be rewritten before it starts.  When this first piece of
+           speech fills the ring, load it there and play it at once; a
+           shorter one would leave old sound behind it, so clear the ring
+           with silence as before. */
+        reader_speech_start_pending = false;
+        size_t loaded = 0;
+        if (total >= I2S_DMA_RING_BYTES) {
+            (void)i2s_channel_preload_data(tx_channel, bytes, total, &loaded);
+        } else {
+            size_t cleared = 0;
+            (void)i2s_channel_preload_data(tx_channel, i2s_silence,
+                                           sizeof(i2s_silence), &cleared);
+        }
+        if (i2s_channel_enable(tx_channel) != ESP_OK)
+            return false;
+        reader_audio_active = true;
+        bytes += loaded;
+        total -= loaded;
+    }
 #endif
 
     size_t bytes_written = 0;
-    esp_err_t err = i2s_channel_write(tx_channel, stereo_frame,
-                                      count * 2 * sizeof(int16_t),
-                                      &bytes_written, portMAX_DELAY);
-    if (err != ESP_OK || bytes_written != count * 2 * sizeof(int16_t)) {
+    esp_err_t err = total ? i2s_channel_write(tx_channel, bytes, total,
+                                              &bytes_written, portMAX_DELAY)
+                          : ESP_OK;
+    if (err != ESP_OK || bytes_written != total) {
         ESP_LOGE(TAG, "I2S write failed: %s (%u/%u bytes)",
                  esp_err_to_name(err), (unsigned)bytes_written,
-                 (unsigned)(count * 2 * sizeof(int16_t)));
+                 (unsigned)total);
         return false;
     }
     speech_samples += count;
@@ -610,8 +654,8 @@ static esp_err_t init_audio(void)
        OpenEVV's deferred locks with the 32 KB instruction cache.
        playback-task wakeup without taking so much internal DMA RAM that
        OpenEVV's own mutex allocation fails. */
-    channel_cfg.dma_desc_num = 6;
-    channel_cfg.dma_frame_num = 256;
+    channel_cfg.dma_desc_num = I2S_DMA_DESCRIPTORS;
+    channel_cfg.dma_frame_num = I2S_DMA_FRAMES;
     ESP_RETURN_ON_ERROR(i2s_new_channel(&channel_cfg, &tx_channel, NULL),
                         TAG, "create I2S channel");
 
@@ -636,22 +680,13 @@ static esp_err_t init_audio(void)
 static bool speak(speech_engine_t *instance, const char *text,
                   uint32_t generation)
 {
-    static const int16_t silence[FRAME_SAMPLES * 2];
-    size_t silence_written = 0;
-
 #ifdef PARAGRAPH_READER_MODE
-    if (!reader_audio_active) {
-        /* A stopped TX channel retains its old DMA descriptors. Replace the
-           whole ring with silence before enabling it, otherwise pause/resume
-           can replay the tail of the previous sentence. */
-        size_t preloaded = 0;
-        (void)i2s_channel_preload_data(tx_channel, silence, sizeof(silence),
-                                       &preloaded);
-        if (i2s_channel_enable(tx_channel) != ESP_OK)
-            return false;
-        reader_audio_active = true;
-    }
+    /* A stopped TX channel retains its old DMA descriptors, which would
+       replay the tail of the previous sentence. on_speech_pcm() rewrites the
+       whole ring and starts the channel when the first speech arrives. */
+    reader_speech_start_pending = !reader_audio_active;
 #else
+    size_t silence_written = 0;
     if (i2s_channel_enable(tx_channel) != ESP_OK)
         return false;
 #endif
@@ -660,9 +695,11 @@ static bool speak(speech_engine_t *instance, const char *text,
     active_generation = generation;
     printf("SPEAK %s\n", text);
     if (!speech_engine_synthesize(instance, text)) {
-        (void)i2s_channel_disable(tx_channel);
 #ifdef PARAGRAPH_READER_MODE
-        reader_audio_active = false;
+        reader_speech_start_pending = false;
+        reader_stop_channel();
+#else
+        (void)i2s_channel_disable(tx_channel);
 #endif
         return false;
     }
@@ -681,11 +718,15 @@ static bool speak(speech_engine_t *instance, const char *text,
         vTaskDelay(pdMS_TO_TICKS(1));
     }
     speech_engine_wait(instance);
+#ifdef PARAGRAPH_READER_MODE
+    reader_speech_start_pending = false;
+#endif
 
     if (generation != requested_generation) {
-        (void)i2s_channel_disable(tx_channel);
 #ifdef PARAGRAPH_READER_MODE
-        reader_audio_active = false;
+        reader_stop_channel();
+#else
+        (void)i2s_channel_disable(tx_channel);
 #endif
         return false;
     }
@@ -695,7 +736,7 @@ static bool speak(speech_engine_t *instance, const char *text,
        amplifier/driver combination repeats the last populated descriptors.
        Queue a full silent frame behind the speech, let it reach the wire, and
        then stop the channel so every utterance is genuinely one-shot. */
-    (void)i2s_channel_write(tx_channel, silence, sizeof(silence),
+    (void)i2s_channel_write(tx_channel, i2s_silence, sizeof(i2s_silence),
                             &silence_written, portMAX_DELAY);
     for (int i = 0; i < 13 && generation == requested_generation; ++i)
         vTaskDelay(pdMS_TO_TICKS(20));
