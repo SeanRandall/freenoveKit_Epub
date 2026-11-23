@@ -4,7 +4,6 @@
 #include <string.h>
 
 #include "bst.h"
-#include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -14,7 +13,6 @@
 #ifndef RR_ENGINE_SAMPLE_RATE
 #define RR_ENGINE_SAMPLE_RATE 10000
 #endif
-#define OPENBST_BLOCK_SAMPLES 2048
 
 struct speech_engine {
     speech_engine_config_t config;
@@ -108,40 +106,50 @@ unsigned speech_engine_sample_rate(const speech_engine_t *engine)
     return engine ? RR_ENGINE_SAMPLE_RATE : 0;
 }
 
+/* OpenBST patched with bst_say_stream (firmware/tools/patch_openbst_speak.py
+   and patch_openbst_frames.py).  The engine hands over each piece of sound,
+   at most 256 samples, as it makes it.
+   Stock bst_say made the whole utterance twice (bst_length to size the
+   buffer, then bst_say) before any of it could be played. */
+extern long bst_say_stream(bst *h, const char *text,
+                           int (*sink)(const int16_t *pcm, long n, void *ctx),
+                           void *ctx);
+
+typedef struct {
+    speech_engine_t *engine;
+    bool stopped;
+    unsigned pieces;
+} openbst_stream_t;
+
+static int openbst_sink(const int16_t *pcm, long n, void *context)
+{
+    openbst_stream_t *stream = context;
+    speech_engine_t *engine = stream->engine;
+    if (!stream->pieces++ && engine->marker_pending && engine->config.marker) {
+        engine->config.marker(engine->pending_marker, engine->config.context);
+        engine->marker_pending = false;
+    }
+    if (engine->abort
+        || !engine->config.pcm(pcm, (size_t)n, engine->config.context)) {
+        stream->stopped = true;
+        return 0;
+    }
+    /* Rendering a book into PSRAM never blocks, so give the idle task a
+       turn now and then, as the old hand-out loop did. */
+    if ((stream->pieces & 63u) == 0)
+        vTaskDelay(1);
+    return 1;
+}
+
 bool speech_engine_synthesize(speech_engine_t *engine, const char *text)
 {
     if (!engine || !engine->instance || !text) return false;
     engine->busy = true;
     engine->abort = false;
-    long wanted = bst_length(engine->instance, text);
-    if (wanted < 0 || (size_t)wanted > SIZE_MAX / sizeof(int16_t)) {
-        engine->busy = false;
-        return false;
-    }
-    size_t allocation = (size_t)(wanted ? wanted : 1) * sizeof(int16_t);
-    int16_t *pcm = heap_caps_malloc(allocation,
-                                    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!pcm) {
-        engine->busy = false;
-        return false;
-    }
-    long generated = bst_say(engine->instance, text, pcm, wanted);
-    bool ok = generated >= 0;
-    if (ok && generated > 0 && engine->marker_pending && engine->config.marker) {
-        engine->config.marker(engine->pending_marker, engine->config.context);
-        engine->marker_pending = false;
-    }
-    for (long at = 0; ok && at < generated && !engine->abort;
-         at += OPENBST_BLOCK_SAMPLES) {
-        size_t count = (size_t)(generated - at);
-        if (count > OPENBST_BLOCK_SAMPLES) count = OPENBST_BLOCK_SAMPLES;
-        ok = engine->config.pcm(pcm + at, count, engine->config.context);
-        if (((unsigned long)at / OPENBST_BLOCK_SAMPLES & 31u) == 31u)
-            vTaskDelay(1);
-    }
-    heap_caps_free(pcm);
+    openbst_stream_t stream = { engine, false, 0 };
+    long made = bst_say_stream(engine->instance, text, openbst_sink, &stream);
     engine->busy = false;
-    return ok && !engine->abort;
+    return made >= 0 && !stream.stopped && !engine->abort;
 }
 
 bool speech_engine_insert_marker(speech_engine_t *engine, uint32_t marker)
