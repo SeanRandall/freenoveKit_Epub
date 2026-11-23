@@ -295,9 +295,7 @@ static bool reader_clock_editing;
 static unsigned reader_clock_field;
 static struct tm reader_clock_value;
 static volatile bool reader_clock_announcement_pending;
-static TickType_t reader_clock_changed_at;
 static volatile bool reader_menu_announcement_pending;
-static TickType_t reader_menu_changed_at;
 static volatile bool reader_preferences_dirty;
 static TickType_t reader_preferences_changed_at;
 static volatile bool reader_preferences_save_requested;
@@ -525,6 +523,27 @@ static void on_speech_marker(uint32_t marker, void *context)
 #endif
 }
 
+/* The TX DMA ring: about 140 ms of sound at 11025 Hz. */
+#define I2S_DMA_DESCRIPTORS 6
+#define I2S_DMA_FRAMES 256
+#define I2S_DMA_RING_BYTES \
+    (I2S_DMA_DESCRIPTORS * I2S_DMA_FRAMES * 2 * sizeof(int16_t))
+static const int16_t i2s_silence[FRAME_SAMPLES * 2];
+#ifdef PARAGRAPH_READER_MODE
+/* Set by speak() when the channel is stopped: on_speech_pcm() starts it with
+   the first speech already in the ring, rather than behind a ring of
+   silence, which delayed every spoken item by about 140 ms. */
+static bool reader_speech_start_pending;
+
+/* Speech cancelled before its first sound never starts the channel. */
+static void reader_stop_channel(void)
+{
+    if (reader_audio_active)
+        (void)i2s_channel_disable(tx_channel);
+    reader_audio_active = false;
+}
+#endif
+
 static bool on_speech_pcm(const int16_t *pcm, size_t count, void *context)
 {
     (void)context;
@@ -583,23 +602,70 @@ static bool on_speech_pcm(const int16_t *pcm, size_t count, void *context)
         stereo_frame[i * 2 + 1] = pcm[i];
 #endif
     }
+    const uint8_t *bytes = (const uint8_t *)stereo_frame;
+    size_t total = count * 2 * sizeof(int16_t);
 #ifdef PARAGRAPH_READER_MODE
     reader_mix_keypress(stereo_frame, count);
+    if (reader_speech_start_pending) {
+        /* A stopped channel keeps its old DMA descriptors, so the whole ring
+           must be rewritten before it starts.  When this first piece of
+           speech fills the ring, load it there and play it at once; a
+           shorter one would leave old sound behind it, so clear the ring
+           with silence as before. */
+        reader_speech_start_pending = false;
+        size_t loaded = 0;
+        if (total >= I2S_DMA_RING_BYTES) {
+            (void)i2s_channel_preload_data(tx_channel, bytes, total, &loaded);
+        } else {
+            size_t cleared = 0;
+            (void)i2s_channel_preload_data(tx_channel, i2s_silence,
+                                           sizeof(i2s_silence), &cleared);
+        }
+        if (i2s_channel_enable(tx_channel) != ESP_OK)
+            return false;
+        reader_audio_active = true;
+        bytes += loaded;
+        total -= loaded;
+    }
 #endif
 
     size_t bytes_written = 0;
-    esp_err_t err = i2s_channel_write(tx_channel, stereo_frame,
-                                      count * 2 * sizeof(int16_t),
-                                      &bytes_written, portMAX_DELAY);
-    if (err != ESP_OK || bytes_written != count * 2 * sizeof(int16_t)) {
+    esp_err_t err = total ? i2s_channel_write(tx_channel, bytes, total,
+                                              &bytes_written, portMAX_DELAY)
+                          : ESP_OK;
+    if (err != ESP_OK || bytes_written != total) {
         ESP_LOGE(TAG, "I2S write failed: %s (%u/%u bytes)",
                  esp_err_to_name(err), (unsigned)bytes_written,
-                 (unsigned)(count * 2 * sizeof(int16_t)));
+                 (unsigned)total);
         return false;
     }
     speech_samples += count;
     return true;
 }
+
+/* OpenEVV's threads (port_esp.c, "evv") run at priority 5 on either core.
+   When one landed on core 0 it kept book playback (then priority 4) from
+   feeding I2S for up to 700 ms, longer than the DMA ring holds, and the
+   ring replayed its last stretch of sound. Playback does little work per
+   frame and blocks in i2s_channel_write, so it can sit above them. */
+#define READER_PLAY_TASK_PRIORITY 6
+/* Counts the times the I2S hardware ran out of new sound; ROLLING_END
+   reports them. */
+static volatile uint32_t reader_i2s_repeats;
+
+#ifdef PARAGRAPH_READER_MODE
+/* The driver calls this when every queued frame has been sent and nothing
+   new was written.  The hardware fills the gap with silence (auto-clear), so
+   this counts gaps rather than audible repeats. */
+static bool IRAM_ATTR reader_on_i2s_repeat(i2s_chan_handle_t handle,
+                                           i2s_event_data_t *event,
+                                           void *context)
+{
+    (void)handle; (void)event; (void)context;
+    ++reader_i2s_repeats;
+    return false;
+}
+#endif
 
 static esp_err_t init_audio(void)
 {
@@ -610,8 +676,13 @@ static esp_err_t init_audio(void)
        OpenEVV's deferred locks with the 32 KB instruction cache.
        playback-task wakeup without taking so much internal DMA RAM that
        OpenEVV's own mutex allocation fails. */
-    channel_cfg.dma_desc_num = 6;
-    channel_cfg.dma_frame_num = 256;
+    channel_cfg.dma_desc_num = I2S_DMA_DESCRIPTORS;
+    channel_cfg.dma_frame_num = I2S_DMA_FRAMES;
+    /* Clear each DMA buffer once it has been sent.  Whenever nothing new
+       arrives in time (a late book frame, or speech cut off by a keypress
+       while the engine winds down) the hardware then plays silence, where
+       it used to loop the last 140 ms and repeat a syllable. */
+    channel_cfg.auto_clear_after_cb = true;
     ESP_RETURN_ON_ERROR(i2s_new_channel(&channel_cfg, &tx_channel, NULL),
                         TAG, "create I2S channel");
 
@@ -630,28 +701,25 @@ static esp_err_t init_audio(void)
     };
     ESP_RETURN_ON_ERROR(i2s_channel_init_std_mode(tx_channel, &config),
                         TAG, "configure I2S");
+#ifdef PARAGRAPH_READER_MODE
+    i2s_event_callbacks_t callbacks = { .on_send_q_ovf = reader_on_i2s_repeat };
+    ESP_RETURN_ON_ERROR(i2s_channel_register_event_callback(
+                            tx_channel, &callbacks, NULL),
+                        TAG, "register I2S callback");
+#endif
     return ESP_OK;
 }
 
 static bool speak(speech_engine_t *instance, const char *text,
                   uint32_t generation)
 {
-    static const int16_t silence[FRAME_SAMPLES * 2];
-    size_t silence_written = 0;
-
 #ifdef PARAGRAPH_READER_MODE
-    if (!reader_audio_active) {
-        /* A stopped TX channel retains its old DMA descriptors. Replace the
-           whole ring with silence before enabling it, otherwise pause/resume
-           can replay the tail of the previous sentence. */
-        size_t preloaded = 0;
-        (void)i2s_channel_preload_data(tx_channel, silence, sizeof(silence),
-                                       &preloaded);
-        if (i2s_channel_enable(tx_channel) != ESP_OK)
-            return false;
-        reader_audio_active = true;
-    }
+    /* A stopped TX channel retains its old DMA descriptors, which would
+       replay the tail of the previous sentence. on_speech_pcm() rewrites the
+       whole ring and starts the channel when the first speech arrives. */
+    reader_speech_start_pending = !reader_audio_active;
 #else
+    size_t silence_written = 0;
     if (i2s_channel_enable(tx_channel) != ESP_OK)
         return false;
 #endif
@@ -660,26 +728,38 @@ static bool speak(speech_engine_t *instance, const char *text,
     active_generation = generation;
     printf("SPEAK %s\n", text);
     if (!speech_engine_synthesize(instance, text)) {
-        (void)i2s_channel_disable(tx_channel);
 #ifdef PARAGRAPH_READER_MODE
-        reader_audio_active = false;
+        reader_speech_start_pending = false;
+        reader_stop_channel();
+#else
+        (void)i2s_channel_disable(tx_channel);
 #endif
         return false;
     }
 
+    /* Wait for sound, not just an idle engine: an engine may not report busy
+       until it has started. A newer keypress, though, makes on_speech_pcm()
+       refuse every sample, so speech cancelled before its first sample never
+       produces any. Waiting for sound then held the reader silent for the
+       whole ten seconds after quick presses; stop once the engine is idle. */
     TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(10000);
     while (xTaskGetTickCount() < deadline) {
         int speaking = speech_engine_busy(instance);
-        if (speech_samples > 0 && !speaking)
+        if (!speaking && (speech_samples > 0
+                          || generation != requested_generation))
             break;
         vTaskDelay(pdMS_TO_TICKS(1));
     }
     speech_engine_wait(instance);
+#ifdef PARAGRAPH_READER_MODE
+    reader_speech_start_pending = false;
+#endif
 
     if (generation != requested_generation) {
-        (void)i2s_channel_disable(tx_channel);
 #ifdef PARAGRAPH_READER_MODE
-        reader_audio_active = false;
+        reader_stop_channel();
+#else
+        (void)i2s_channel_disable(tx_channel);
 #endif
         return false;
     }
@@ -689,7 +769,7 @@ static bool speak(speech_engine_t *instance, const char *text,
        amplifier/driver combination repeats the last populated descriptors.
        Queue a full silent frame behind the speech, let it reach the wire, and
        then stop the channel so every utterance is genuinely one-shot. */
-    (void)i2s_channel_write(tx_channel, silence, sizeof(silence),
+    (void)i2s_channel_write(tx_channel, i2s_silence, sizeof(i2s_silence),
                             &silence_written, portMAX_DELAY);
     for (int i = 0; i < 13 && generation == requested_generation; ++i)
         vTaskDelay(pdMS_TO_TICKS(20));
@@ -1003,6 +1083,35 @@ static void reader_log_dash_context(const char *stage, const char *text)
     }
 }
 
+/* init_audio() allocates the I2S interrupt on the core that calls it.  Start-up
+   creates the channel on core 0, away from the speech engine on core 1, but
+   the channel is also rebuilt for UI speech from the engine task, which would
+   move the interrupt onto the engine's core.  There, synthesis can delay it
+   past the 140 ms of sound the hardware holds, leaving a gap in the sound.
+   This small task does the rebuild on core 0. */
+static TaskHandle_t reader_audio_setup_task;
+static SemaphoreHandle_t reader_audio_setup_done;
+static volatile esp_err_t reader_audio_setup_result;
+
+static void reader_audio_setup_loop(void *argument)
+{
+    (void)argument;
+    for (;;) {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        reader_audio_setup_result = init_audio();
+        xSemaphoreGive(reader_audio_setup_done);
+    }
+}
+
+static esp_err_t reader_init_audio_on_core0(void)
+{
+    if (xPortGetCoreID() == 0 || !reader_audio_setup_task)
+        return init_audio();
+    xTaskNotifyGive(reader_audio_setup_task);
+    xSemaphoreTake(reader_audio_setup_done, portMAX_DELAY);
+    return reader_audio_setup_result;
+}
+
 /* Pausing deliberately retains reader_pcm and reader_play_offset.  UI speech
    must not, however, inherit already-populated I2S DMA descriptors from book
    playback.  Recreating this small channel is the only reliable flush offered
@@ -1021,7 +1130,7 @@ static bool reader_discard_dma_audio(void)
             return false;
         tx_channel = NULL;
     }
-    return init_audio() == ESP_OK;
+    return reader_init_audio_on_core0() == ESP_OK;
 }
 
 static bool reader_start_next_text_chunk(speech_engine_t *instance)
@@ -1438,6 +1547,7 @@ static bool reader_play_pcm(uint32_t generation)
     size_t minimum_rolling_lead = SIZE_MAX;
     int64_t worst_feed_gap_us = 0;
     int64_t previous_write_return_us = esp_timer_get_time();
+    const uint32_t repeats_at_start = reader_i2s_repeats;
     for (size_t at = reader_play_offset;;) {
         size_t section_pause_at = SIZE_MAX;
         if (reader_pause_between_sections
@@ -1637,12 +1747,13 @@ static bool reader_play_pcm(uint32_t generation)
         reader_play_offset = at;
     }
     reader_stop_audio();
-    printf("ROLLING_END samples=%u underrun_waits=%u feed_stalls=%u worst_feed_gap_ms=%u min_lead_ms=%u overflow=%d\n",
+    printf("ROLLING_END samples=%u underrun_waits=%u feed_stalls=%u worst_feed_gap_ms=%u min_lead_ms=%u overflow=%d i2s_repeats=%lu\n",
            (unsigned)reader_pcm_samples, underruns, feed_stalls,
            (unsigned)(worst_feed_gap_us / 1000),
            minimum_rolling_lead == SIZE_MAX ? 0U
                : (unsigned)(minimum_rolling_lead * 1000 / SAMPLE_RATE),
-           reader_render_overflow);
+           reader_render_overflow,
+           (unsigned long)(reader_i2s_repeats - repeats_at_start));
     if (reader_play_offset >= reader_pcm_samples)
         reader_play_offset = 0;
     return generation == requested_generation && !reader_paused;
@@ -3449,7 +3560,6 @@ static void reader_speak_menu_item(void)
     if (reader_ui_busy)
         ++requested_generation;
     reader_menu_announcement_pending = true;
-    reader_menu_changed_at = xTaskGetTickCount();
 }
 
 static void reader_format_number_words(int value, char *number, size_t size)
@@ -3625,7 +3735,6 @@ static void reader_speak_status_menu_item(void)
     if (reader_ui_busy)
         ++requested_generation;
     reader_menu_announcement_pending = true;
-    reader_menu_changed_at = xTaskGetTickCount();
 }
 
 static void reader_open_status_menu(void)
@@ -3845,7 +3954,6 @@ static void reader_announce_clock_field(void)
              names[reader_clock_field], value);
     ++requested_generation;
     reader_clock_announcement_pending = true;
-    reader_clock_changed_at = xTaskGetTickCount();
 }
 
 static void reader_begin_clock_edit(void)
@@ -4764,10 +4872,8 @@ static void reader_button_scan_task(void *argument)
     bool right_hold_handled = false;
     TickType_t right_started = 0;
     bool library_announcement_pending = false;
-    TickType_t library_changed_at = 0;
     bool file_detail_announcement_pending = false;
     ReaderFileDetail pending_file_detail = READER_FILE_DETAIL_SIZE;
-    TickType_t file_detail_changed_at = 0;
     bool suppressed_press = false;
     ReaderInterfaceSwitch interface_switch = READER_SWITCH_NONE;
     bool interface_speech_started = false;
@@ -4969,7 +5075,6 @@ static void reader_button_scan_task(void *argument)
                        rapid run of presses. */
                     ++requested_generation;
                     library_announcement_pending = true;
-                    library_changed_at = xTaskGetTickCount();
                 } else if (reader_paused) {
                     if (reader_media_mode) {
                         reader_cycle_media_jump_mode();
@@ -5204,7 +5309,6 @@ static void reader_button_scan_task(void *argument)
                 reader_reset_file_action();
                 ++requested_generation;
                 library_announcement_pending = true;
-                library_changed_at = xTaskGetTickCount();
             } else if (reader_library && stable_key == 5) {
                 if (reader_library_count
                     && reader_library_entries[reader_library_index].kind
@@ -5214,7 +5318,6 @@ static void reader_button_scan_task(void *argument)
                         (reader_file_detail + 1)
                         % READER_FILE_DETAIL_COUNT);
                     file_detail_announcement_pending = true;
-                    file_detail_changed_at = xTaskGetTickCount();
                     ++requested_generation;
                 } else {
                     reader_speak_library_item();
@@ -5370,28 +5473,23 @@ static void reader_button_scan_task(void *argument)
             reader_speak_library_item();
             puts("READER library opened");
         }
-        /* Rapid movement should speak the item on which the user lands, not
-           repeatedly start and cut off every intermediate filename. */
-        if (library_announcement_pending && stable_key == 0
-            && xTaskGetTickCount() - library_changed_at
-                   >= pdMS_TO_TICKS(180)) {
+        /* Each announcement starts as soon as the key is released.  Speech
+           cut off by a further press stops at once, so there is no need to
+           wait for movement to settle first. */
+        if (library_announcement_pending && stable_key == 0) {
             library_announcement_pending = false;
             reader_speak_library_item();
         }
         if (file_detail_announcement_pending && stable_key == 0
-            && !reader_ui_busy
-            && xTaskGetTickCount() - file_detail_changed_at
-                   >= pdMS_TO_TICKS(140)) {
+            && !reader_ui_busy) {
             file_detail_announcement_pending = false;
             reader_speak_file_detail(pending_file_detail);
         }
-        /* Menu movement and repeated value changes are deliberately silent
-           while the stick is busy.  Compose the text only after landing so
-           an in-flight utterance never observes a mutated shared buffer. */
+        /* Menu movement and repeated value changes are silent while the
+           stick is held.  Compose the text only after landing so an
+           in-flight utterance never observes a mutated shared buffer. */
         if (reader_menu_announcement_pending && stable_key == 0
-            && !reader_ui_busy
-            && xTaskGetTickCount() - reader_menu_changed_at
-                   >= pdMS_TO_TICKS(250)) {
+            && !reader_ui_busy) {
             reader_menu_announcement_pending = false;
             if (reader_menu) {
                 if (reader_speech_menu)
@@ -5404,9 +5502,7 @@ static void reader_button_scan_task(void *argument)
             }
         }
         if (reader_clock_announcement_pending && reader_clock_editing
-            && stable_key == 0 && !reader_ui_busy
-            && xTaskGetTickCount() - reader_clock_changed_at
-                   >= pdMS_TO_TICKS(180)) {
+            && stable_key == 0 && !reader_ui_busy) {
             reader_clock_announcement_pending = false;
             queue_audio(AUDIO_SPEECH, reader_announcement);
         }
@@ -6430,7 +6526,8 @@ static void reader_engine_task(void *arg)
                (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
         BaseType_t play_created = xTaskCreatePinnedToCoreWithCaps(
             reader_play_task, "reader_play", 4096,
-            (void *)(uintptr_t)event.generation, 4, NULL, 0,
+            (void *)(uintptr_t)event.generation, READER_PLAY_TASK_PRIORITY,
+            NULL, 0,
             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (play_created != pdPASS) {
             ESP_LOGE(TAG, "could not start playback task");
@@ -6554,6 +6651,13 @@ void app_main(void)
     /* I2S is deliberately created on core 0. Its interrupt remains separate
        from the speech engine, which is created and owned on core 1 below. */
     ESP_ERROR_CHECK(init_audio());
+    reader_audio_setup_done = xSemaphoreCreateBinary();
+    ESP_ERROR_CHECK(reader_audio_setup_done ? ESP_OK : ESP_ERR_NO_MEM);
+    ESP_ERROR_CHECK(xTaskCreatePinnedToCoreWithCaps(
+                        reader_audio_setup_loop, "audio_setup", 4096, NULL, 5,
+                        &reader_audio_setup_task, 0,
+                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) == pdPASS
+                    ? ESP_OK : ESP_ERR_NO_MEM);
     esp_err_t recording_audio_result = reader_prepare_recording_channel();
     if (recording_audio_result != ESP_OK)
         ESP_LOGW(TAG, "recording input unavailable: %s",
