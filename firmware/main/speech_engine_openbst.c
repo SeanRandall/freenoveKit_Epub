@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "bst.h"
+#include "openbst_numbers.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -157,10 +158,27 @@ static int openbst_sink(const int16_t *pcm, long n, void *context)
 bool speech_engine_synthesize(speech_engine_t *engine, const char *text)
 {
     if (!engine || !engine->instance || !text) return false;
+    /* The English builds (1995 and the ...ENG ones) get numbers spelled out
+       in English words first; see openbst_numbers.h. */
+    static const char build[] = OPENBST_BUILD_NAME;
+    size_t build_length = sizeof(build) - 1;
+    bool english = !strcmp(build, "1995")
+        || (build_length > 3 && !strcmp(build + build_length - 3, "ENG"));
+    char *spelled = NULL;
+    if (english) {
+        /* A digit can become a dozen letters ("999999999"). */
+        size_t capacity = strlen(text) * 12 + 16;
+        spelled = malloc(capacity);
+        if (spelled) {
+            openbst_spell_numbers(text, spelled, capacity);
+            text = spelled;
+        }
+    }
     engine->busy = true;
     engine->abort = false;
     openbst_stream_t stream = { engine, false, 0 };
     long made = bst_say_stream(engine->instance, text, openbst_sink, &stream);
+    free(spelled);
     engine->busy = false;
     return made >= 0 && !stream.stopped && !engine->abort;
 }

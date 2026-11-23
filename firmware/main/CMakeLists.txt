@@ -150,6 +150,7 @@ elseif(RR_SPEECH_ENGINE STREQUAL "openbst")
     endforeach()
     list(APPEND APP_SOURCES
         "speech_engine_openbst.c"
+        "openbst_numbers.c"
         "openbst_2006eng_index.c"
         "${OPENBST_ROOT}/src/data/${RR_OPENBST_BUILD}.c"
         ${OPENBST_SOURCES})
