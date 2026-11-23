@@ -657,7 +657,8 @@ static volatile uint32_t reader_i2s_repeats;
 
 #ifdef PARAGRAPH_READER_MODE
 /* The driver calls this when every queued frame has been sent and nothing
-   new was written, so the hardware is replaying old sound. */
+   new was written.  The hardware fills the gap with silence (auto-clear), so
+   this counts gaps rather than audible repeats. */
 static bool IRAM_ATTR reader_on_i2s_repeat(i2s_chan_handle_t handle,
                                            i2s_event_data_t *event,
                                            void *context)
@@ -679,6 +680,11 @@ static esp_err_t init_audio(void)
        OpenEVV's own mutex allocation fails. */
     channel_cfg.dma_desc_num = I2S_DMA_DESCRIPTORS;
     channel_cfg.dma_frame_num = I2S_DMA_FRAMES;
+    /* Clear each DMA buffer once it has been sent.  Whenever nothing new
+       arrives in time (a late book frame, or speech cut off by a keypress
+       while the engine winds down) the hardware then plays silence, where
+       it used to loop the last 140 ms and repeat a syllable. */
+    channel_cfg.auto_clear_after_cb = true;
     ESP_RETURN_ON_ERROR(i2s_new_channel(&channel_cfg, &tx_channel, NULL),
                         TAG, "create I2S channel");
 
@@ -1083,8 +1089,8 @@ static void reader_log_dash_context(const char *stage, const char *text)
    creates the channel on core 0, away from the speech engine on core 1, but
    the channel is also rebuilt for UI speech from the engine task, which would
    move the interrupt onto the engine's core.  There, synthesis can delay it
-   past the 140 ms of sound the hardware holds, and the hardware replays old
-   sound: a repeated syllable.  This small task does the rebuild on core 0. */
+   past the 140 ms of sound the hardware holds, leaving a gap in the sound.
+   This small task does the rebuild on core 0. */
 static TaskHandle_t reader_audio_setup_task;
 static SemaphoreHandle_t reader_audio_setup_done;
 static volatile esp_err_t reader_audio_setup_result;
