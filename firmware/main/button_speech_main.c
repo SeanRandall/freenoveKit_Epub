@@ -22,6 +22,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_ota_ops.h"
+#include "esp_pm.h"
 #include "esp_system.h"
 #include "soc/rtc_cntl_reg.h"
 #include "soc/soc.h"
@@ -94,6 +95,26 @@ static volatile int32_t reader_seek_samples;
 static volatile int reader_sentence_seek;
 static volatile bool reader_controls_ready;
 static volatile bool reader_ui_busy;
+/* Power management lets the processor drop from 240 MHz to 80 MHz whenever
+   nothing holds this lock.  Speech synthesis, book loading and indexing,
+   media playback and the moments after a key press hold it, so they run
+   exactly as fast as before; the reader drops to 80 MHz while paused and
+   while synthesis waits with up to a minute of speech already buffered. */
+#define READER_CPU_MAX_MHZ 240
+#define READER_CPU_MIN_MHZ 80
+#define READER_KEY_FULL_SPEED_MS 3000
+static esp_pm_lock_handle_t reader_full_speed_lock;
+static bool reader_engine_full_speed; /* owned by the engine task */
+
+/* Takes or gives this task's share of the full-speed lock; *held records
+   the share so acquire and release always pair. */
+static void reader_full_speed(bool *held, bool want)
+{
+    if (!reader_full_speed_lock || *held == want) return;
+    if (want) (void)esp_pm_lock_acquire(reader_full_speed_lock);
+    else (void)esp_pm_lock_release(reader_full_speed_lock);
+    *held = want;
+}
 static volatile bool reader_ui_tone_pending;
 static volatile bool reader_resume_after_status;
 static volatile bool reader_resume_after_navigation_speech;
@@ -1024,7 +1045,7 @@ static bool reader_discard_dma_audio(void)
     return init_audio() == ESP_OK;
 }
 
-static bool reader_start_next_text_chunk(speech_engine_t *instance)
+static bool reader_start_next_text_chunk_after_wait(speech_engine_t *instance)
 {
     size_t text_len = reader_book_length;
     if (reader_text_offset >= text_len)
@@ -1049,6 +1070,8 @@ static bool reader_start_next_text_chunk(speech_engine_t *instance)
                    (unsigned)(lead * 1000 / SAMPLE_RATE));
             break;
         }
+        /* Nothing is synthesizing while the buffer drains. */
+        reader_full_speed(&reader_engine_full_speed, false);
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 
@@ -1081,8 +1104,11 @@ static bool reader_start_next_text_chunk(speech_engine_t *instance)
             xSemaphoreGive(reader_pcm_mutex);
             break;
         }
+        reader_full_speed(&reader_engine_full_speed, false);
         vTaskDelay(pdMS_TO_TICKS(10));
     }
+    /* Back to full speed before synthesis starts. */
+    reader_full_speed(&reader_engine_full_speed, true);
 
     size_t remaining = text_len - reader_text_offset;
     size_t chunk_start = reader_text_offset;
@@ -1249,6 +1275,15 @@ static bool reader_start_next_text_chunk(speech_engine_t *instance)
         return false;
     }
     return true;
+}
+
+/* The wait above drops to low speed; whichever way it returns, the engine
+   task carries on at full speed. */
+static bool reader_start_next_text_chunk(speech_engine_t *instance)
+{
+    bool started = reader_start_next_text_chunk_after_wait(instance);
+    reader_full_speed(&reader_engine_full_speed, true);
+    return started;
 }
 
 static void reader_abort_render(speech_engine_t *instance)
@@ -4670,8 +4705,11 @@ static void reader_index_task(void *argument)
 {
     char *path = argument;
     puts("BOOK_INDEX background start");
+    bool full_speed = false;
+    reader_full_speed(&full_speed, true);
     esp_err_t result = epub_build_index_cancelable(
         path, &reader_index_cancel_requested);
+    reader_full_speed(&full_speed, false);
     printf("BOOK_INDEX background complete result=%s\n",
            esp_err_to_name(result));
     bool current_book = !strcmp(path, reader_selected_path);
@@ -4772,8 +4810,20 @@ static void reader_button_scan_task(void *argument)
     ReaderInterfaceSwitch interface_switch = READER_SWITCH_NONE;
     bool interface_speech_started = false;
     TickType_t interface_spoken_at = 0;
+    bool keys_full_speed = false;
+    TickType_t key_activity_at = 0;
 
     for (;;) {
+        /* Keep full speed while a key is down and for a few seconds after,
+           so menus and the library respond as quickly as before. */
+        if (stable_key || candidate_key) {
+            reader_full_speed(&keys_full_speed, true);
+            key_activity_at = xTaskGetTickCount();
+        } else if (keys_full_speed
+                   && xTaskGetTickCount() - key_activity_at
+                          >= pdMS_TO_TICKS(READER_KEY_FULL_SPEED_MS)) {
+            reader_full_speed(&keys_full_speed, false);
+        }
         int raw = 0;
         int millivolts = 3300;
         if (adc_oneshot_read(buttons->adc, BUTTON_ADC_CHANNEL, &raw) == ESP_OK)
@@ -6065,8 +6115,10 @@ static void reader_engine_task(void *arg)
            xPortGetCoreID());
     for (;;) {
         AudioEvent event;
+        reader_full_speed(&reader_engine_full_speed, false);
         if (xQueueReceive(audio_queue, &event, portMAX_DELAY) != pdTRUE)
             continue;
+        reader_full_speed(&reader_engine_full_speed, true);
         if (event.generation != requested_generation) {
             if (event.kind == AUDIO_NAVIGATION_SPEECH)
                 printf("NAV_SPEECH stale event=%lu requested=%lu\n",
@@ -6634,6 +6686,9 @@ void app_main(void)
     ESP_ERROR_CHECK(reader_markers != NULL ? ESP_OK : ESP_ERR_NO_MEM);
     audio_queue = xQueueCreate(1, sizeof(AudioEvent));
     ESP_ERROR_CHECK(audio_queue != NULL ? ESP_OK : ESP_ERR_NO_MEM);
+    if (esp_pm_lock_create(ESP_PM_CPU_FREQ_MAX, 0, "reader_full_speed",
+                           &reader_full_speed_lock) != ESP_OK)
+        reader_full_speed_lock = NULL;
 
     BaseType_t engine_created = xTaskCreatePinnedToCoreWithCaps(
         reader_engine_task, "reader_engine", 65536, NULL, 4, NULL, 1,
@@ -6659,6 +6714,17 @@ void app_main(void)
     }
     printf("BOOT_STAGE request_ms=%u\n",
            (unsigned)((esp_timer_get_time() - boot_started_us) / 1000));
+    /* Start frequency scaling only after start-up, which runs at full speed
+       throughout. */
+    esp_pm_config_t power = {
+        .max_freq_mhz = READER_CPU_MAX_MHZ,
+        .min_freq_mhz = READER_CPU_MIN_MHZ,
+        .light_sleep_enable = false,
+    };
+    esp_err_t power_result = esp_pm_configure(&power);
+    printf("POWER scaling max_mhz=%d min_mhz=%d result=%s\n",
+           READER_CPU_MAX_MHZ, READER_CPU_MIN_MHZ,
+           esp_err_to_name(power_result));
     TickType_t clock_retained_at = 0;
     for (;;) {
         TickType_t now_ticks = xTaskGetTickCount();

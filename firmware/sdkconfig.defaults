@@ -49,3 +49,6 @@ CONFIG_AUDIO_SIMPLE_DEC_M4A_SUPPORT=y
 # CONFIG_AUDIO_ENCODER_SBC_SUPPORT is not set
 # CONFIG_AUDIO_ENCODER_LC3_SUPPORT is not set
 # CONFIG_AUDIO_ENCODER_G722_SUPPORT is not set
+
+# Let the reader drop to 80 MHz when it is idle or synthesis is ahead.
+CONFIG_PM_ENABLE=y
