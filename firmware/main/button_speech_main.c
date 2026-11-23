@@ -645,6 +645,29 @@ static bool on_speech_pcm(const int16_t *pcm, size_t count, void *context)
     return true;
 }
 
+/* OpenEVV's threads (port_esp.c, "evv") run at priority 5 on either core.
+   When one landed on core 0 it kept book playback (then priority 4) from
+   feeding I2S for up to 700 ms, longer than the DMA ring holds, and the
+   ring replayed its last stretch of sound. Playback does little work per
+   frame and blocks in i2s_channel_write, so it can sit above them. */
+#define READER_PLAY_TASK_PRIORITY 6
+/* Counts the times the I2S hardware ran out of new sound; ROLLING_END
+   reports them. */
+static volatile uint32_t reader_i2s_repeats;
+
+#ifdef PARAGRAPH_READER_MODE
+/* The driver calls this when every queued frame has been sent and nothing
+   new was written, so the hardware is replaying old sound. */
+static bool IRAM_ATTR reader_on_i2s_repeat(i2s_chan_handle_t handle,
+                                           i2s_event_data_t *event,
+                                           void *context)
+{
+    (void)handle; (void)event; (void)context;
+    ++reader_i2s_repeats;
+    return false;
+}
+#endif
+
 static esp_err_t init_audio(void)
 {
     i2s_chan_config_t channel_cfg =
@@ -674,6 +697,12 @@ static esp_err_t init_audio(void)
     };
     ESP_RETURN_ON_ERROR(i2s_channel_init_std_mode(tx_channel, &config),
                         TAG, "configure I2S");
+#ifdef PARAGRAPH_READER_MODE
+    i2s_event_callbacks_t callbacks = { .on_send_q_ovf = reader_on_i2s_repeat };
+    ESP_RETURN_ON_ERROR(i2s_channel_register_event_callback(
+                            tx_channel, &callbacks, NULL),
+                        TAG, "register I2S callback");
+#endif
     return ESP_OK;
 }
 
@@ -1050,6 +1079,35 @@ static void reader_log_dash_context(const char *stage, const char *text)
     }
 }
 
+/* init_audio() allocates the I2S interrupt on the core that calls it.  Start-up
+   creates the channel on core 0, away from the speech engine on core 1, but
+   the channel is also rebuilt for UI speech from the engine task, which would
+   move the interrupt onto the engine's core.  There, synthesis can delay it
+   past the 140 ms of sound the hardware holds, and the hardware replays old
+   sound: a repeated syllable.  This small task does the rebuild on core 0. */
+static TaskHandle_t reader_audio_setup_task;
+static SemaphoreHandle_t reader_audio_setup_done;
+static volatile esp_err_t reader_audio_setup_result;
+
+static void reader_audio_setup_loop(void *argument)
+{
+    (void)argument;
+    for (;;) {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        reader_audio_setup_result = init_audio();
+        xSemaphoreGive(reader_audio_setup_done);
+    }
+}
+
+static esp_err_t reader_init_audio_on_core0(void)
+{
+    if (xPortGetCoreID() == 0 || !reader_audio_setup_task)
+        return init_audio();
+    xTaskNotifyGive(reader_audio_setup_task);
+    xSemaphoreTake(reader_audio_setup_done, portMAX_DELAY);
+    return reader_audio_setup_result;
+}
+
 /* Pausing deliberately retains reader_pcm and reader_play_offset.  UI speech
    must not, however, inherit already-populated I2S DMA descriptors from book
    playback.  Recreating this small channel is the only reliable flush offered
@@ -1068,7 +1126,7 @@ static bool reader_discard_dma_audio(void)
             return false;
         tx_channel = NULL;
     }
-    return init_audio() == ESP_OK;
+    return reader_init_audio_on_core0() == ESP_OK;
 }
 
 static bool reader_start_next_text_chunk(speech_engine_t *instance)
@@ -1485,6 +1543,7 @@ static bool reader_play_pcm(uint32_t generation)
     size_t minimum_rolling_lead = SIZE_MAX;
     int64_t worst_feed_gap_us = 0;
     int64_t previous_write_return_us = esp_timer_get_time();
+    const uint32_t repeats_at_start = reader_i2s_repeats;
     for (size_t at = reader_play_offset;;) {
         size_t section_pause_at = SIZE_MAX;
         if (reader_pause_between_sections
@@ -1684,12 +1743,13 @@ static bool reader_play_pcm(uint32_t generation)
         reader_play_offset = at;
     }
     reader_stop_audio();
-    printf("ROLLING_END samples=%u underrun_waits=%u feed_stalls=%u worst_feed_gap_ms=%u min_lead_ms=%u overflow=%d\n",
+    printf("ROLLING_END samples=%u underrun_waits=%u feed_stalls=%u worst_feed_gap_ms=%u min_lead_ms=%u overflow=%d i2s_repeats=%lu\n",
            (unsigned)reader_pcm_samples, underruns, feed_stalls,
            (unsigned)(worst_feed_gap_us / 1000),
            minimum_rolling_lead == SIZE_MAX ? 0U
                : (unsigned)(minimum_rolling_lead * 1000 / SAMPLE_RATE),
-           reader_render_overflow);
+           reader_render_overflow,
+           (unsigned long)(reader_i2s_repeats - repeats_at_start));
     if (reader_play_offset >= reader_pcm_samples)
         reader_play_offset = 0;
     return generation == requested_generation && !reader_paused;
@@ -6477,7 +6537,8 @@ static void reader_engine_task(void *arg)
                (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
         BaseType_t play_created = xTaskCreatePinnedToCoreWithCaps(
             reader_play_task, "reader_play", 4096,
-            (void *)(uintptr_t)event.generation, 4, NULL, 0,
+            (void *)(uintptr_t)event.generation, READER_PLAY_TASK_PRIORITY,
+            NULL, 0,
             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (play_created != pdPASS) {
             ESP_LOGE(TAG, "could not start playback task");
@@ -6601,6 +6662,13 @@ void app_main(void)
     /* I2S is deliberately created on core 0. Its interrupt remains separate
        from the speech engine, which is created and owned on core 1 below. */
     ESP_ERROR_CHECK(init_audio());
+    reader_audio_setup_done = xSemaphoreCreateBinary();
+    ESP_ERROR_CHECK(reader_audio_setup_done ? ESP_OK : ESP_ERR_NO_MEM);
+    ESP_ERROR_CHECK(xTaskCreatePinnedToCoreWithCaps(
+                        reader_audio_setup_loop, "audio_setup", 4096, NULL, 5,
+                        &reader_audio_setup_task, 0,
+                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) == pdPASS
+                    ? ESP_OK : ESP_ERR_NO_MEM);
     esp_err_t recording_audio_result = reader_prepare_recording_channel();
     if (recording_audio_result != ESP_OK)
         ESP_LOGW(TAG, "recording input unavailable: %s",
