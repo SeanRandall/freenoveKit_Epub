@@ -295,9 +295,7 @@ static bool reader_clock_editing;
 static unsigned reader_clock_field;
 static struct tm reader_clock_value;
 static volatile bool reader_clock_announcement_pending;
-static TickType_t reader_clock_changed_at;
 static volatile bool reader_menu_announcement_pending;
-static TickType_t reader_menu_changed_at;
 static volatile bool reader_preferences_dirty;
 static TickType_t reader_preferences_changed_at;
 static volatile bool reader_preferences_save_requested;
@@ -3562,7 +3560,6 @@ static void reader_speak_menu_item(void)
     if (reader_ui_busy)
         ++requested_generation;
     reader_menu_announcement_pending = true;
-    reader_menu_changed_at = xTaskGetTickCount();
 }
 
 static void reader_format_number_words(int value, char *number, size_t size)
@@ -3738,7 +3735,6 @@ static void reader_speak_status_menu_item(void)
     if (reader_ui_busy)
         ++requested_generation;
     reader_menu_announcement_pending = true;
-    reader_menu_changed_at = xTaskGetTickCount();
 }
 
 static void reader_open_status_menu(void)
@@ -3958,7 +3954,6 @@ static void reader_announce_clock_field(void)
              names[reader_clock_field], value);
     ++requested_generation;
     reader_clock_announcement_pending = true;
-    reader_clock_changed_at = xTaskGetTickCount();
 }
 
 static void reader_begin_clock_edit(void)
@@ -4877,10 +4872,8 @@ static void reader_button_scan_task(void *argument)
     bool right_hold_handled = false;
     TickType_t right_started = 0;
     bool library_announcement_pending = false;
-    TickType_t library_changed_at = 0;
     bool file_detail_announcement_pending = false;
     ReaderFileDetail pending_file_detail = READER_FILE_DETAIL_SIZE;
-    TickType_t file_detail_changed_at = 0;
     bool suppressed_press = false;
     ReaderInterfaceSwitch interface_switch = READER_SWITCH_NONE;
     bool interface_speech_started = false;
@@ -5082,7 +5075,6 @@ static void reader_button_scan_task(void *argument)
                        rapid run of presses. */
                     ++requested_generation;
                     library_announcement_pending = true;
-                    library_changed_at = xTaskGetTickCount();
                 } else if (reader_paused) {
                     if (reader_media_mode) {
                         reader_cycle_media_jump_mode();
@@ -5317,7 +5309,6 @@ static void reader_button_scan_task(void *argument)
                 reader_reset_file_action();
                 ++requested_generation;
                 library_announcement_pending = true;
-                library_changed_at = xTaskGetTickCount();
             } else if (reader_library && stable_key == 5) {
                 if (reader_library_count
                     && reader_library_entries[reader_library_index].kind
@@ -5327,7 +5318,6 @@ static void reader_button_scan_task(void *argument)
                         (reader_file_detail + 1)
                         % READER_FILE_DETAIL_COUNT);
                     file_detail_announcement_pending = true;
-                    file_detail_changed_at = xTaskGetTickCount();
                     ++requested_generation;
                 } else {
                     reader_speak_library_item();
@@ -5483,28 +5473,23 @@ static void reader_button_scan_task(void *argument)
             reader_speak_library_item();
             puts("READER library opened");
         }
-        /* Rapid movement should speak the item on which the user lands, not
-           repeatedly start and cut off every intermediate filename. */
-        if (library_announcement_pending && stable_key == 0
-            && xTaskGetTickCount() - library_changed_at
-                   >= pdMS_TO_TICKS(180)) {
+        /* Each announcement starts as soon as the key is released.  Speech
+           cut off by a further press stops at once, so there is no need to
+           wait for movement to settle first. */
+        if (library_announcement_pending && stable_key == 0) {
             library_announcement_pending = false;
             reader_speak_library_item();
         }
         if (file_detail_announcement_pending && stable_key == 0
-            && !reader_ui_busy
-            && xTaskGetTickCount() - file_detail_changed_at
-                   >= pdMS_TO_TICKS(140)) {
+            && !reader_ui_busy) {
             file_detail_announcement_pending = false;
             reader_speak_file_detail(pending_file_detail);
         }
-        /* Menu movement and repeated value changes are deliberately silent
-           while the stick is busy.  Compose the text only after landing so
-           an in-flight utterance never observes a mutated shared buffer. */
+        /* Menu movement and repeated value changes are silent while the
+           stick is held.  Compose the text only after landing so an
+           in-flight utterance never observes a mutated shared buffer. */
         if (reader_menu_announcement_pending && stable_key == 0
-            && !reader_ui_busy
-            && xTaskGetTickCount() - reader_menu_changed_at
-                   >= pdMS_TO_TICKS(250)) {
+            && !reader_ui_busy) {
             reader_menu_announcement_pending = false;
             if (reader_menu) {
                 if (reader_speech_menu)
@@ -5517,9 +5502,7 @@ static void reader_button_scan_task(void *argument)
             }
         }
         if (reader_clock_announcement_pending && reader_clock_editing
-            && stable_key == 0 && !reader_ui_busy
-            && xTaskGetTickCount() - reader_clock_changed_at
-                   >= pdMS_TO_TICKS(180)) {
+            && stable_key == 0 && !reader_ui_busy) {
             reader_clock_announcement_pending = false;
             queue_audio(AUDIO_SPEECH, reader_announcement);
         }
