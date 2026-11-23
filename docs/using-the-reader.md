@@ -50,6 +50,12 @@ The menu includes the sleep timer, speech settings, clock, library sorting, sect
 
 The status submenu lets you enable, disable and reorder individual announcements. Network modes appear only when their corresponding configuration files are present on the SD card.
 
+The battery status item, and the speak battery unlock action, give the battery percentage, rounded to the nearest five, and roughly how much reading time is left, such as "battery 65 percent, about 2 hours 10 minutes left". Near the end it says "battery almost empty". Both figures are worked out from the battery's voltage, so treat them as a guide rather than exact figures. After you unplug USB, give them about two minutes to settle. Right after the reader starts, the item is skipped for a few seconds until the first reading.
+
+The board cannot tell directly whether USB power is connected, so the reader judges it from the voltage. While the voltage is climbing steadily, the battery item says "battery charging". Near the end of a charge, the charger holds the voltage steady and it says "battery on charger". It also says "battery on charger" when the battery has been switched off with the power button beside the five-way control, because the reader then sees only the charger. If you hear "battery on charger" for more than about an hour, check that the battery is switched on. With no battery connected, the item is skipped.
+
+The reader learns your battery. It starts with figures measured on a typical battery, about 3 hours 15 minutes of continuous reading from a full charge. Each time you read until the battery runs out and the reader switches itself off, it measures that run on the next start-up and adjusts its estimates, so they follow the battery actually fitted as it ages. Pausing during the run is fine. Discharge cycles interrupted by charging early do not recalibrate the device.
+
 ## Book opening and cache
 
 Indexed opening processes a book before reading starts, enabling full navigation and duration estimates immediately. Instant opening begins reading sooner and builds the complete index while paused. Large books take longer the first time. Extracted text, structure and metadata are cached under `.rr/.cache` on the SD card.

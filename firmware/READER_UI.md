@@ -77,15 +77,25 @@ The available announcement fields are:
   "elapsed … remaining" or "elapsed … of …". referring to current epub section or entire file
 - Current document number, total supported-document count and documents
   remaining in the current folder. A combined form says "document … of …".
-- Battery percentage and estimated battery time remaining. Combined forms may
-  include the spoken prefix "battery level".
+- Battery: one field giving the percentage and estimated reading time left,
+  such as "battery 65 percent, about 2 hours 10 minutes left". Both come from
+  the cell voltage on GPIO20, smoothed over about two minutes, and a curve of
+  running time left at each voltage. The percentage is spoken to the nearest
+  five; the time to the nearest 10 minutes above an hour and 5 minutes above
+  10 minutes. Near the end it says "battery almost empty". The board has no
+  USB-sense or charge-status line, so a rise of 40 mV or more over three
+  minutes is spoken as "battery charging", and 4.25 V or more, where the
+  charger holds the voltage or the battery is switched off, as "battery on
+  charger". The curve starts from a measured 702035 discharge and is
+  re-learned from the battery log after each discharge that runs until the
+  reader loses power, and kept in NVS.
 - Current document title, reading percentage and selected navigation unit.
 
 The default sequence contains only:
 
 1. Current time.
-2. Current battery percentage.
-3. Estimated reading time remaining in the current document.
+2. Estimated reading time remaining in the current document.
+3. Battery percentage and time left.
 
 The sequence is an ordered checklist editable through **Interface and library >
 Playing-screen status items**. Every field available to the paused reading
