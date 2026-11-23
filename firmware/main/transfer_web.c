@@ -316,7 +316,7 @@ static esp_err_t settings_send_json(httpd_req_t *req)
     }
     settings_append(&at, &left,
         "],\"statusNames\":[\"Time\",\"Date\",\"Remaining section duration\","
-        "\"Remaining file duration\",\"Battery level\",\"Battery time estimate\","
+        "\"Remaining file duration\",\"Battery\","
         "\"Sleep time remaining\",\"Remaining SD card space\",\"Device temperature\"],"
         "\"speech\":[");
     size_t setting_count = speech_engine_setting_count(NULL);
@@ -403,7 +403,7 @@ static esp_err_t settings_save_form(httpd_req_t *req)
         if (!end || *end) continue;
         if (!strncmp(field, "status", 6)) {
             unsigned bit = (unsigned)strtoul(field + 6, &end, 10);
-            if (end && !*end && bit < 9 && value) status_mask |= 1U << bit;
+            if (end && !*end && bit < 8 && value) status_mask |= 1U << bit;
             continue;
         }
         if (!strncmp(field, "speech", 6)) {

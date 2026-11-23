@@ -22,6 +22,9 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_ota_ops.h"
+#include "esp_partition.h"
+#include "esp_random.h"
+#include "esp_rom_crc.h"
 #include "esp_system.h"
 #include "soc/rtc_cntl_reg.h"
 #include "soc/soc.h"
@@ -36,6 +39,7 @@
 #include "esp_vfs_fat.h"
 #include "ff.h"
 #include "sdmmc_cmd.h"
+#include "battery_charge.h"
 #include "epub_text.h"
 #include "esp_audio_dec_default.h"
 #include "esp_audio_simple_dec.h"
@@ -62,6 +66,8 @@
 #define I2S_DATA GPIO_NUM_1
 #define BUTTON_ADC_UNIT ADC_UNIT_2
 #define BUTTON_ADC_CHANNEL ADC_CHANNEL_8 /* GPIO19 on ESP32-S3 */
+/* GPIO20 on ESP32-S3, shared with the unused LCD reset line. */
+#define BATTERY_ADC_CHANNEL ADC_CHANNEL_9
 
 static const char *const TAG = "button_speech";
 static int16_t *stereo_frame;
@@ -347,17 +353,22 @@ enum ReaderStatusField {
     READER_STATUS_DATE,
     READER_STATUS_SECTION_REMAINING,
     READER_STATUS_FILE_REMAINING,
-    READER_STATUS_BATTERY_LEVEL,
-    READER_STATUS_BATTERY_TIME,
+    READER_STATUS_BATTERY,
     READER_STATUS_SLEEP_REMAINING,
     READER_STATUS_SD_SPACE,
     READER_STATUS_DEVICE_TEMPERATURE,
     READER_STATUS_COUNT,
 };
-static uint8_t reader_status_order[READER_STATUS_COUNT] = {0, 1, 2, 3, 4, 5, 6, 7, 8};
+static uint8_t reader_status_order[READER_STATUS_COUNT] = {0, 1, 2, 3, 4, 5, 6, 7};
 static uint32_t reader_status_enabled =
     (1U << READER_STATUS_TIME) | (1U << READER_STATUS_FILE_REMAINING)
-    | (1U << READER_STATUS_BATTERY_LEVEL);
+    | (1U << READER_STATUS_BATTERY);
+/* Saved status settings identify items by their position in the list above.
+   Layout 2 merged the separate battery level and battery time items, which
+   were positions 4 and 5, into one; settings saved without a layout number
+   are converted once at start-up. */
+#define READER_STATUS_LAYOUT 2
+#define READER_STATUS_OLD_BATTERY_TIME 5
 static size_t reader_status_menu_index;
 static volatile bool reader_recording;
 static volatile bool reader_recording_stop;
@@ -473,7 +484,809 @@ static void reader_speak_library_item(void);
 typedef struct {
     adc_oneshot_unit_handle_t adc;
     adc_cali_handle_t calibration;
+    adc_cali_handle_t battery_calibration;
 } ButtonContext;
+
+/* Battery sensing.  The Freenove media board feeds the cell to GPIO20
+   through a three-resistor network (10k from the cell, 10k from 3.3 V and
+   20k to ground), so the pin sits at (cell + 3.3 V) / 2.5.  The ADC driver
+   is not safe to call from several tasks, so only the button task samples
+   the pin, between key scans, and publishes a smoothed cell voltage for the
+   announcements to read.
+
+   The board has no charge-status or USB-sense line, so charging is judged
+   from the voltage alone; battery_charge.c follows the charger through a
+   charge and estimates the level and the time to full. */
+#define BATTERY_SAMPLE_INTERVAL_MS 200
+#define BATTERY_SAMPLES_PER_READING 16
+#define BATTERY_MIN_PLAUSIBLE_MV 2500
+#define BATTERY_MAX_PLAUSIBLE_MV 4500
+/* Each reading spans 3.2 seconds; battery_smoothing_add (battery_charge.c)
+   weights each by 1/32, smoothing over about two minutes so a burst of
+   speech or Wi-Fi load does not move the level, but follows the jump when
+   the charger goes on or the battery is switched with it in. */
+static volatile int battery_millivolts; /* 0 until a plausible reading */
+static portMUX_TYPE battery_lock = portMUX_INITIALIZER_UNLOCKED;
+/* Updated each minute by the battery logger; read under battery_lock. */
+static struct {
+    battery_charge_phase_t phase;
+    int percent, minutes; /* -1 without an estimate */
+    unsigned samples;     /* minutes checked since start-up */
+    int first_mv;         /* the first minute's voltage */
+    int checked_mv;       /* the voltage at the latest check */
+    int carried_minutes;  /* the cap carried over from a charge, or -1 */
+} battery_charge_state = { BATTERY_CHARGE_NONE, -1, -1, 0, 0, 0, -1 };
+/* The charge level the previous session reached, when it ended charging:
+   unplugging the charger restarts the reader, and after a charge the
+   battery's voltage reads high for most of an hour while it settles.  Until
+   it settles, the level is not given as higher than this, counted down by
+   the minutes spent reading.  Set at start-up from the log; -1 if none. */
+static int battery_carried_percent = -1;
+/* For the first minutes after start-up the logger cannot yet tell a battery
+   on the charger, whose voltage the charger lifts, from one that is not.
+   Until then, a reading this high or a rise this large since the first
+   minute is not given as a level. */
+#define BATTERY_UNSURE_MINUTES 5
+#define BATTERY_UNSURE_HIGH_MV 4150
+#define BATTERY_UNSURE_RISE_MV 15
+static struct {
+    int32_t sum_mv;
+    int count, min_mv, max_mv;
+} battery_minute; /* Unsmoothed readings since the logger last took them. */
+
+/* Running time left, in minutes, at each voltage while the reader plays.
+   The default comes from a full discharge of a 702035 cell (nominally
+   400 mAh): 3 hours 16 minutes of continuous speech from a full charge.
+   After each discharge that runs until the reader switches off, the reader
+   measures its own battery from the log and blends the result in, so the
+   curve follows the battery actually fitted and its ageing. */
+#define BATTERY_CURVE_POINTS 21
+#define BATTERY_CURVE_VERSION 1
+static const int16_t battery_curve_mv[BATTERY_CURVE_POINTS] = {
+    4150, 4100, 4050, 4000, 3950, 3900, 3850, 3800, 3750, 3700, 3650,
+    3600, 3550, 3500, 3450, 3400, 3350, 3300, 3200, 3100, 3000,
+};
+typedef struct {
+    uint16_t minutes[BATTERY_CURVE_POINTS];
+    uint8_t version;
+    uint8_t runs;              /* discharges learned so far */
+    uint32_t learned_sequence; /* last log record of the newest one */
+} BatteryCurve;
+static BatteryCurve battery_curve = {
+    .minutes = {196, 191, 167, 151, 137, 117, 92, 78, 68, 62, 53,
+                44, 34, 25, 16, 10, 7, 6, 3, 2, 1},
+    .version = BATTERY_CURVE_VERSION,
+};
+
+static int battery_minutes_left(int millivolts)
+{
+    const uint16_t *minutes = battery_curve.minutes;
+    if (millivolts >= battery_curve_mv[0]) return minutes[0];
+    for (size_t i = 1; i < BATTERY_CURVE_POINTS; ++i) {
+        if (millivolts < battery_curve_mv[i]) continue;
+        int span_mv = battery_curve_mv[i - 1] - battery_curve_mv[i];
+        return minutes[i] + (millivolts - battery_curve_mv[i])
+            * (minutes[i - 1] - minutes[i]) / span_mv;
+    }
+    return 0;
+}
+
+static int battery_percent_of_minutes(int minutes)
+{
+    int full = battery_curve.minutes[0];
+    if (!full) return 0;
+    int percent = (minutes * 100 + full / 2) / full;
+    return percent > 100 ? 100 : percent;
+}
+
+static int battery_percent(int millivolts)
+{
+    return battery_percent_of_minutes(battery_minutes_left(millivolts));
+}
+
+static void battery_poll(const ButtonContext *buttons)
+{
+    static TickType_t last_sample;
+    static int pin_sum, sample_count;
+    static battery_smoothing_t smoothing;
+    static bool reported_implausible;
+    TickType_t now = xTaskGetTickCount();
+    if (!buttons->battery_calibration
+        || now - last_sample < pdMS_TO_TICKS(BATTERY_SAMPLE_INTERVAL_MS))
+        return;
+    last_sample = now;
+    int raw = 0, pin_mv = 0;
+    if (adc_oneshot_read(buttons->adc, BATTERY_ADC_CHANNEL, &raw) != ESP_OK
+        || adc_cali_raw_to_voltage(buttons->battery_calibration, raw,
+                                   &pin_mv) != ESP_OK)
+        return;
+    pin_sum += pin_mv;
+    if (++sample_count < BATTERY_SAMPLES_PER_READING) return;
+    int average_pin_mv = pin_sum / sample_count;
+    pin_sum = sample_count = 0;
+    int cell_mv = average_pin_mv * 5 / 2 - 3300;
+    if (cell_mv < BATTERY_MIN_PLAUSIBLE_MV
+        || cell_mv > BATTERY_MAX_PLAUSIBLE_MV) {
+        if (!reported_implausible)
+            printf("BATTERY implausible pin_mv=%d cell_mv=%d\n",
+                   average_pin_mv, cell_mv);
+        reported_implausible = true;
+        battery_millivolts = 0;
+        smoothing = (battery_smoothing_t){0};
+        return;
+    }
+    reported_implausible = false;
+    taskENTER_CRITICAL(&battery_lock);
+    if (!battery_minute.count || cell_mv < battery_minute.min_mv)
+        battery_minute.min_mv = cell_mv;
+    if (!battery_minute.count || cell_mv > battery_minute.max_mv)
+        battery_minute.max_mv = cell_mv;
+    battery_minute.sum_mv += cell_mv;
+    ++battery_minute.count;
+    taskEXIT_CRITICAL(&battery_lock);
+    battery_millivolts = battery_smoothing_add(&smoothing, cell_mv);
+}
+
+/* Battery log in internal flash, for calibration and self-learning.
+   A 64 KB "battlog" partition holds a ring of 16-byte records.  The
+   battery is checked every minute but a record is written only when
+   something changed: the voltage moved 10 mV, playback started or stopped,
+   the battery is nearly empty, or 15 minutes passed; and every minute while
+   charging.  Each record keeps the lowest and highest reading since the
+   previous one.  A full discharge takes roughly 200 records (3 KB).  Half
+   the log is kept erased ahead of the newest record, which even at one
+   record a minute is about 34 hours.  Each start also writes a record
+   holding the reset reason.  When the battery runs out the reader simply
+   loses power, so the last sample before a power-on or brownout start
+   shows where the battery gave out.
+
+   Flash is used rather than the SD card because a power cut during a card
+   write can damage the card, and the battery normally dies mid-book.  The
+   slow part of flash, erasing, happens only while the reader is paused and
+   only ahead of the newest record, so a start never erases the run before
+   it.  Writing a record into already-erased flash takes a fraction of a
+   millisecond, well inside the audio buffer, so records are written during
+   playback too.  Flash operations suspend the cache that PSRAM sits behind,
+   so they run only on app_main, whose stack is in internal RAM. */
+#define BATTERY_LOG_INTERVAL_MS 60000
+#define BATTERY_RECORD_MAGIC 0xB7
+#define BATTERY_FLAG_PLAYING 0x02
+#define BATTERY_FLAG_BOOT 0x04
+#define BATTERY_FLAG_NO_READING 0x08
+#define BATTERY_FLAG_CHARGING 0x10
+/* Kept for diagnostic builds, which can log every single reading (minute
+   holds seconds since start, temperature_c the tenths) and marks made with
+   the stick.  Learning skips them, so such a log does no harm. */
+#define BATTERY_FLAG_RAW 0x20
+#define BATTERY_FLAG_MARK 0x40
+#define BATTERY_FLAG_TEST (BATTERY_FLAG_RAW | BATTERY_FLAG_MARK)
+#define BATTERY_FLASH_SECTOR 4096U
+#define BATTERY_LOG_STEP_MV 10
+#define BATTERY_LOG_LOW_MV 3500 /* below this, log every minute */
+#define BATTERY_LOG_HEARTBEAT_MINUTES 15
+
+typedef struct __attribute__((packed)) {
+    uint8_t magic;
+    uint8_t session;       /* random per start */
+    uint16_t minute;       /* minutes since start */
+    uint32_t sequence;     /* increases across starts; finds the newest */
+    uint16_t millivolts;   /* minute average; reset reason in a boot record */
+    uint8_t below_mv;      /* average minus lowest reading, capped */
+    uint8_t above_mv;      /* highest reading minus average, capped */
+    int8_t temperature_c;
+    uint8_t flags;
+    uint16_t crc;
+} BatteryRecord;
+_Static_assert(sizeof(BatteryRecord) == 16, "battery record size");
+
+static const esp_partition_t *battery_flash;
+static const uint8_t *battery_flash_map;
+static esp_partition_mmap_handle_t battery_flash_map_handle;
+static QueueHandle_t battery_record_queue;
+static volatile uint32_t battery_flash_next;  /* next slot to write */
+static uint32_t battery_flash_erased;  /* blank bytes from next onward */
+static uint32_t battery_flash_sequence;
+static uint8_t battery_flash_session;
+
+static uint16_t battery_record_crc(const BatteryRecord *record)
+{
+    return esp_rom_crc16_le(0, (const uint8_t *)record,
+                            offsetof(BatteryRecord, crc));
+}
+
+static bool battery_record_at(uint32_t offset, BatteryRecord *record)
+{
+    memcpy(record, battery_flash_map + offset, sizeof(*record));
+    return record->magic == BATTERY_RECORD_MAGIC
+        && record->crc == battery_record_crc(record);
+}
+
+static bool battery_slot_blank(uint32_t offset)
+{
+    const uint8_t *slot = battery_flash_map + offset;
+    for (size_t i = 0; i < sizeof(BatteryRecord); ++i)
+        if (slot[i] != 0xFF) return false;
+    return true;
+}
+
+static void battery_flash_count_erased(void)
+{
+    uint32_t size = battery_flash->size;
+    battery_flash_erased = 0;
+    while (battery_flash_erased < size
+           && battery_slot_blank((battery_flash_next + battery_flash_erased)
+                                 % size))
+        battery_flash_erased += sizeof(BatteryRecord);
+}
+
+/* The oldest record still in the log: just past the erased gap. */
+static uint32_t battery_flash_oldest(void)
+{
+    uint32_t size = battery_flash->size, start = battery_flash_next;
+    for (uint32_t step = 1; step < size / sizeof(BatteryRecord); ++step) {
+        uint32_t offset = (start + size - sizeof(BatteryRecord)) % size;
+        if (battery_slot_blank(offset)) break;
+        start = offset;
+    }
+    return start;
+}
+
+/* Learning the curve.  A discharge is a stretch of one session in which the
+   voltage only falls, apart from small recoveries after pauses, ending when
+   the reader lost power with the battery nearly flat.  Each curve voltage
+   the run passed through gets the time from that point to the end.
+
+   Two things would teach it wrong figures, so they restart the run: a rise
+   well above the lowest voltage so far, which is charging, however slow;
+   and the fast drop just after USB is unplugged, while the charger's lift
+   falls away.  Until the voltage falls at a normal pace, a fast drop moves
+   the start of the run on.  Above 3.5 V a real discharge falls under
+   10 mV a minute; only the last minutes fall faster. */
+#define BATTERY_RUN_RISE_MV 60      /* above the run's lowest: charging */
+#define BATTERY_RUN_SETTLE_MV_PER_MINUTE 20
+#define BATTERY_RUN_SETTLE_ABOVE_MV 3500
+#define BATTERY_RUN_FLAT_MV 3450    /* the last record must be below this */
+#define BATTERY_RUN_MIN_DROP_MV 300
+#define BATTERY_RUN_MIN_MINUTES 30
+
+typedef struct {
+    uint32_t start_offset, end_offset, end_sequence;
+    int start_mv, last_mv, low_mv;
+    unsigned start_minute, last_minute;
+    uint8_t session;
+    bool active, settled;
+} BatteryRun;
+
+static bool battery_run_ran_flat(const BatteryRun *run, unsigned reset_reason)
+{
+    return run->active
+        && (reset_reason == ESP_RST_POWERON || reset_reason == ESP_RST_BROWNOUT)
+        && run->last_mv < BATTERY_RUN_FLAT_MV
+        && run->start_mv - run->last_mv >= BATTERY_RUN_MIN_DROP_MV
+        && run->last_minute - run->start_minute >= BATTERY_RUN_MIN_MINUTES;
+}
+
+/* Finds the newest discharge in the log.  Runs at start-up, before this
+   session has written anything, so the last session's run ends with the
+   current reset reason. */
+static bool battery_find_discharge(BatteryRun *found)
+{
+    uint32_t size = battery_flash->size;
+    BatteryRun run = {0};
+    bool have = false;
+    for (uint32_t offset = battery_flash_oldest(); offset != battery_flash_next;
+         offset = (offset + sizeof(BatteryRecord)) % size) {
+        BatteryRecord record;
+        if (!battery_record_at(offset, &record)
+            || (record.flags & BATTERY_FLAG_TEST))
+            continue;
+        if (record.flags & BATTERY_FLAG_BOOT) {
+            if (battery_run_ran_flat(&run, record.millivolts)) {
+                *found = run;
+                have = true;
+            }
+            run.active = false;
+            continue;
+        }
+        if ((record.flags & BATTERY_FLAG_NO_READING) || !record.millivolts) {
+            run.active = false;
+            continue;
+        }
+        int mv = record.millivolts;
+        if (run.active
+            && (record.session != run.session
+                || mv > run.low_mv + BATTERY_RUN_RISE_MV))
+            run.active = false;
+        if (run.active && !run.settled && mv < run.last_mv) {
+            unsigned minutes = record.minute - run.last_minute;
+            if (mv > BATTERY_RUN_SETTLE_ABOVE_MV
+                && run.last_mv - mv
+                       > BATTERY_RUN_SETTLE_MV_PER_MINUTE * (int)(minutes ? minutes : 1))
+                run.active = false; /* still settling: start again here */
+            else
+                run.settled = true;
+        }
+        if (!run.active)
+            run = (BatteryRun){
+                .start_offset = offset, .start_mv = mv, .low_mv = mv,
+                .start_minute = record.minute, .session = record.session,
+                .active = true,
+            };
+        if (mv < run.low_mv) run.low_mv = mv;
+        run.end_offset = offset;
+        run.end_sequence = record.sequence;
+        run.last_mv = mv;
+        run.last_minute = record.minute;
+    }
+    if (battery_run_ran_flat(&run, esp_reset_reason())) {
+        *found = run;
+        have = true;
+    }
+    return have;
+}
+
+static void battery_learn_run(const BatteryRun *run)
+{
+    uint16_t measured[BATTERY_CURVE_POINTS] = {0};
+    bool covered[BATTERY_CURVE_POINTS] = {false};
+    uint32_t size = battery_flash->size;
+    int previous_mv = 0;
+    unsigned previous_minute = 0;
+    for (uint32_t offset = run->start_offset;;
+         offset = (offset + sizeof(BatteryRecord)) % size) {
+        BatteryRecord record;
+        if (battery_record_at(offset, &record)
+            && !(record.flags & (BATTERY_FLAG_BOOT | BATTERY_FLAG_NO_READING
+                                 | BATTERY_FLAG_TEST))) {
+            int mv = record.millivolts;
+            if (previous_mv && mv < previous_mv)
+                for (size_t i = 0; i < BATTERY_CURVE_POINTS; ++i) {
+                    int point = battery_curve_mv[i];
+                    if (covered[i] || point < mv || point >= previous_mv)
+                        continue;
+                    /* Where the voltage crossed this point, in tenths of a
+                       minute, assuming a straight fall between records. */
+                    int crossed = (int)previous_minute * 10
+                        + (previous_mv - point)
+                              * (int)(record.minute - previous_minute) * 10
+                              / (previous_mv - mv);
+                    int left = ((int)run->last_minute * 10 - crossed + 5) / 10;
+                    measured[i] = (uint16_t)(left > 0 ? left : 0);
+                    covered[i] = true;
+                }
+            previous_mv = mv;
+            previous_minute = record.minute;
+        }
+        if (offset == run->end_offset) break;
+    }
+    int top = -1;
+    for (size_t i = 0; i < BATTERY_CURVE_POINTS; ++i) {
+        if (!covered[i] && battery_curve_mv[i] < run->last_mv)
+            covered[i] = true; /* below where it ran out: nothing left */
+        if (covered[i] && top < 0) top = (int)i;
+    }
+    if (top < 0) return;
+    /* The first discharge replaces the default, then each new one counts
+       for a half, then a third, so the curve keeps up with an ageing cell
+       without one odd run moving it too far. */
+    int divisor = battery_curve.runs < 2 ? battery_curve.runs + 1 : 3;
+    int old_top = battery_curve.minutes[top];
+    for (size_t i = top; i < BATTERY_CURVE_POINTS; ++i) {
+        if (!covered[i]) continue;
+        int old = battery_curve.minutes[i];
+        battery_curve.minutes[i] = (uint16_t)(old + (measured[i] - old) / divisor);
+    }
+    /* Voltages above where the run started keep their shape, scaled to the
+       new value at the top of the run. */
+    for (int i = 0; i < top; ++i)
+        battery_curve.minutes[i] = (uint16_t)(old_top
+            ? battery_curve.minutes[i] * battery_curve.minutes[top] / old_top
+            : battery_curve.minutes[top]);
+    for (int i = BATTERY_CURVE_POINTS - 2; i >= 0; --i)
+        if (battery_curve.minutes[i] < battery_curve.minutes[i + 1])
+            battery_curve.minutes[i] = battery_curve.minutes[i + 1];
+    if (battery_curve.runs < UINT8_MAX) ++battery_curve.runs;
+    battery_curve.learned_sequence = run->end_sequence;
+    printf("BATTERY_CURVE learned start_mv=%d end_mv=%d minutes=%u runs=%u\n",
+           run->start_mv, run->last_mv,
+           run->last_minute - run->start_minute, battery_curve.runs);
+}
+
+static bool battery_curve_valid(const BatteryCurve *curve)
+{
+    if (curve->version != BATTERY_CURVE_VERSION || !curve->minutes[0])
+        return false;
+    for (size_t i = 1; i < BATTERY_CURVE_POINTS; ++i)
+        if (curve->minutes[i] > curve->minutes[i - 1]) return false;
+    return true;
+}
+
+/* The charging figures (battery_charge.c), saved beside the discharge
+   curve and learned from the log the same way.  Version 2 follows jumps in
+   the smoothing, so it relearns every charge in the log from the start. */
+#define BATTERY_CHARGE_CURVE_VERSION 2
+typedef struct {
+    battery_charge_curve_t curve;
+    uint8_t version;
+    uint8_t runs;              /* charges learned so far */
+    uint32_t learned_sequence; /* record that showed the newest one finish */
+} BatteryChargeCurve;
+
+/* Blends in one measured charge, if it is newer than the last learned. */
+static bool battery_charge_take(BatteryChargeCurve *saved,
+                                const battery_charge_measured_t *measured)
+{
+    if (measured->end_sequence <= saved->learned_sequence) return false;
+    unsigned runs = saved->runs;
+    battery_charge_learn(&saved->curve, &runs, measured);
+    saved->runs = (uint8_t)(runs > UINT8_MAX ? UINT8_MAX : runs);
+    saved->learned_sequence = measured->end_sequence;
+    printf("BATTERY_CHARGE learned start_mv=%d hold_tenths=%d%s\n",
+           measured->start_mv, measured->hold,
+           measured->hold_covered ? "" : " (hold not used)");
+    return true;
+}
+
+/* Follows one session of the log as the logger followed it, a minute at a
+   time, to find where a charge stood when the session ended.  Minutes with
+   no record repeat the last (the logger writes every minute while
+   charging, and otherwise only on a change). */
+typedef struct {
+    battery_charge_t charge;
+    battery_smoothing_t smoothing;
+    unsigned minute;
+    int mv;
+    bool started;
+} BatteryFollow;
+
+static void battery_follow_feed(BatteryFollow *follow, unsigned minute, int mv)
+{
+    unsigned from = follow->started ? follow->minute + 1 : minute;
+    if (minute > from + 60) from = minute - 60;
+    for (unsigned m = from; m <= minute; ++m) {
+        int reading = m < minute ? follow->mv : mv, smoothed = 0;
+        for (int i = 0; i < 19; ++i)
+            smoothed = battery_smoothing_add(&follow->smoothing, reading);
+        battery_charge_update(&follow->charge, m, smoothed,
+                              battery_percent(smoothed));
+    }
+    follow->started = true;
+    follow->minute = minute;
+    follow->mv = mv;
+}
+
+static void battery_charge_load_and_learn(nvs_handle_t handle)
+{
+    BatteryChargeCurve saved = { .version = BATTERY_CHARGE_CURVE_VERSION };
+    battery_charge_default_curve(&saved.curve);
+    BatteryChargeCurve stored;
+    size_t length = sizeof(stored);
+    if (nvs_get_blob(handle, "charge", &stored, &length) == ESP_OK
+        && length == sizeof(stored)
+        && stored.version == BATTERY_CHARGE_CURVE_VERSION
+        && battery_charge_curve_valid(&stored.curve))
+        saved = stored;
+    /* A wiped log restarts the sequence numbers. */
+    if (saved.learned_sequence >= battery_flash_sequence)
+        saved.learned_sequence = 0;
+    /* Walk the log session by session, learning each finished charge newer
+       than the last one learned. */
+    uint32_t size = battery_flash->size;
+    battery_charge_learner_t learner;
+    battery_charge_learner_reset(&learner);
+    static BatteryFollow follow; /* static: too big for app_main's stack */
+    memset(&follow, 0, sizeof(follow));
+    uint8_t session = 0;
+    bool learned = false;
+    for (uint32_t offset = battery_flash_oldest();;
+         offset = (offset + sizeof(BatteryRecord)) % size) {
+        bool at_end = offset == battery_flash_next;
+        BatteryRecord record;
+        if (!at_end
+            && (!battery_record_at(offset, &record)
+                || (record.flags & BATTERY_FLAG_TEST)))
+            continue;
+        battery_charge_measured_t measured;
+        /* The end of a session (the end of the log ends the last one). */
+        bool session_end = at_end || (record.flags & BATTERY_FLAG_BOOT)
+            || record.session != session;
+        if (session_end && battery_charge_learner_end(&learner, &measured))
+            learned |= battery_charge_take(&saved, &measured);
+        if (at_end) break;
+        if (session_end) memset(&follow, 0, sizeof(follow));
+        session = record.session;
+        if ((record.flags & (BATTERY_FLAG_BOOT | BATTERY_FLAG_NO_READING))
+            || !record.millivolts)
+            continue;
+        battery_follow_feed(&follow, record.minute, record.millivolts);
+        if (battery_charge_learner_feed(&learner, record.minute,
+                                        record.millivolts, record.sequence,
+                                        &measured))
+            learned |= battery_charge_take(&saved, &measured);
+    }
+    if (learned
+        && (nvs_set_blob(handle, "charge", &saved, sizeof(saved)) != ESP_OK
+            || nvs_commit(handle) != ESP_OK))
+        puts("BATTERY_CHARGE save failed");
+    battery_charge_use_curve(&saved.curve);
+    printf("BATTERY_CHARGE runs=%u hold_tenths=%u climb_tenths=", saved.runs,
+           saved.curve.hold);
+    for (size_t i = 0; i < BATTERY_CHARGE_POINTS; ++i)
+        printf("%s%u", i ? "," : "", saved.curve.climb_left[i]);
+    putchar('\n');
+    /* The last session before this start: did it end part-way through a
+       charge it was following? */
+    int percent, minutes;
+    if (battery_charge_estimate(&follow.charge, &percent, &minutes)) {
+        battery_carried_percent = percent;
+        printf("BATTERY_CHARGE carried percent=%d\n", percent);
+    }
+}
+
+/* app_main only, at start-up before playback: NVS writes pause the flash
+   cache.  Uses its own NVS namespace so it also works in the keypad demo,
+   and silently keeps the default curve if NVS is unavailable. */
+static void battery_curve_load_and_learn(void)
+{
+    nvs_handle_t handle;
+    if (nvs_open("battery", NVS_READWRITE, &handle) != ESP_OK) return;
+    BatteryCurve saved;
+    size_t length = sizeof(saved);
+    if (nvs_get_blob(handle, "curve", &saved, &length) == ESP_OK
+        && length == sizeof(saved) && battery_curve_valid(&saved))
+        battery_curve = saved;
+    /* A wiped log restarts the sequence numbers. */
+    if (battery_curve.learned_sequence >= battery_flash_sequence)
+        battery_curve.learned_sequence = 0;
+    BatteryRun run;
+    if (battery_find_discharge(&run)
+        && run.end_sequence > battery_curve.learned_sequence) {
+        battery_learn_run(&run);
+        if (nvs_set_blob(handle, "curve", &battery_curve,
+                         sizeof(battery_curve)) != ESP_OK
+            || nvs_commit(handle) != ESP_OK)
+            puts("BATTERY_CURVE save failed");
+    }
+    battery_charge_load_and_learn(handle);
+    nvs_close(handle);
+    printf("BATTERY_CURVE runs=%u minutes=", battery_curve.runs);
+    for (size_t i = 0; i < BATTERY_CURVE_POINTS; ++i)
+        printf("%s%u", i ? "," : "", battery_curve.minutes[i]);
+    putchar('\n');
+}
+
+/* app_main only, before the logger task starts. */
+static void battery_flash_init(void)
+{
+    battery_record_queue = xQueueCreate(4, sizeof(BatteryRecord));
+    battery_flash = esp_partition_find_first(
+        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, "battlog");
+    if (!battery_record_queue || !battery_flash
+        || esp_partition_mmap(battery_flash, 0, battery_flash->size,
+                              ESP_PARTITION_MMAP_DATA,
+                              (const void **)&battery_flash_map,
+                              &battery_flash_map_handle) != ESP_OK) {
+        battery_flash = NULL;
+        puts("BATTLOG unavailable");
+        return;
+    }
+    uint32_t size = battery_flash->size, newest = 0, count = 0;
+    battery_flash_sequence = 0;
+    for (uint32_t offset = 0; offset < size; offset += sizeof(BatteryRecord)) {
+        BatteryRecord record;
+        if (!battery_record_at(offset, &record)) continue;
+        if (!count++ || record.sequence >= battery_flash_sequence) {
+            battery_flash_sequence = record.sequence;
+            newest = offset;
+        }
+    }
+    battery_flash_next = count ? (newest + sizeof(BatteryRecord)) % size : 0;
+    battery_flash_sequence = count ? battery_flash_sequence + 1 : 1;
+    battery_flash_count_erased();
+    battery_flash_session = (uint8_t)esp_random();
+    printf("BATTLOG records=%u next=%u erased=%u sequence=%u session=%02x\n",
+           (unsigned)count, (unsigned)battery_flash_next,
+           (unsigned)battery_flash_erased, (unsigned)battery_flash_sequence,
+           battery_flash_session);
+    BatteryRecord boot = {
+        .magic = BATTERY_RECORD_MAGIC,
+        .session = battery_flash_session,
+        .millivolts = (uint16_t)esp_reset_reason(),
+        .flags = BATTERY_FLAG_BOOT,
+    };
+    (void)xQueueSend(battery_record_queue, &boot, 0);
+    battery_curve_load_and_learn();
+}
+
+/* app_main only: its stack is internal RAM.  Writes a waiting record if
+   there is erased room, and erases ahead only when the reader is idle. */
+static void battery_flash_service(bool idle)
+{
+    if (!battery_flash) return;
+    uint32_t size = battery_flash->size;
+    BatteryRecord record;
+    if (battery_flash_erased >= sizeof(record)
+        && xQueueReceive(battery_record_queue, &record, 0) == pdTRUE) {
+        record.sequence = battery_flash_sequence++;
+        record.crc = battery_record_crc(&record);
+        if (esp_partition_write(battery_flash, battery_flash_next, &record,
+                                sizeof(record)) != ESP_OK)
+            puts("BATTLOG write failed");
+        battery_flash_next = (battery_flash_next + sizeof(record)) % size;
+        battery_flash_erased -= sizeof(record);
+    }
+    if (!idle || battery_flash_erased >= size / 2)
+        return;
+    uint32_t next_sector_offset = battery_flash_next % BATTERY_FLASH_SECTOR;
+    if (!battery_flash_erased && next_sector_offset) {
+        /* The rest of this sector holds old or damaged records and the
+           start of it holds new ones, so it cannot be erased: move on to
+           the next sector instead. */
+        battery_flash_next = (battery_flash_next - next_sector_offset
+                              + BATTERY_FLASH_SECTOR) % size;
+        battery_flash_count_erased();
+        return;
+    }
+    uint32_t end = (battery_flash_next + battery_flash_erased) % size;
+    uint32_t sector = end - end % BATTERY_FLASH_SECTOR;
+    if (sector == battery_flash_next - next_sector_offset && next_sector_offset)
+        return; /* would erase this session's newest records */
+    if (esp_partition_erase_range(battery_flash, sector,
+                                  BATTERY_FLASH_SECTOR) != ESP_OK) {
+        puts("BATTLOG erase failed");
+        return;
+    }
+    battery_flash_count_erased();
+}
+
+/* Print the newest records, oldest first, so a run can be read back over
+   serial after the battery has been recharged. */
+static void battery_flash_dump(void)
+{
+    if (!battery_flash) return;
+    uint32_t size = battery_flash->size, end = battery_flash_next;
+    uint32_t start = battery_flash_oldest(), found = 0;
+    for (uint32_t offset = start; offset != end;
+         offset = (offset + sizeof(BatteryRecord)) % size) {
+        BatteryRecord record;
+        if (battery_record_at(offset, &record)) ++found;
+    }
+    printf("BATTLOG_DUMP begin records=%u "
+           "fields=sequence,session,minute,mv_or_reset,min_mv,max_mv,temp_c,"
+           "flags(2=playing,4=boot,8=no_reading,10=charging)\n",
+           (unsigned)found);
+    for (uint32_t offset = start; offset != end;
+         offset = (offset + sizeof(BatteryRecord)) % size) {
+        BatteryRecord record;
+        if (!battery_record_at(offset, &record)) continue;
+        printf("BATTLOG,%u,%02x,%u,%u,%u,%u,%d,%x\n",
+               (unsigned)record.sequence, record.session, record.minute,
+               record.millivolts,
+               (unsigned)(record.millivolts - record.below_mv),
+               (unsigned)(record.millivolts + record.above_mv),
+               record.temperature_c, record.flags);
+        if (found > 50 && !(record.sequence % 50))
+            vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    puts("BATTLOG_DUMP end");
+}
+
+static void battery_log_task(void *argument)
+{
+    bool playing_known = argument != NULL;
+    /* All the logger remembers between records: the last record written and
+       the extremes seen since. */
+    int logged_mv = 0, span_min_mv = 0, span_max_mv = 0;
+    unsigned logged_minute = 0;
+    int logged_flags = -1;
+    bool span_valid = false;
+    battery_charge_t charge = {0};
+    int carried_minutes = battery_carried_percent >= 0
+        ? battery_carried_percent * battery_curve.minutes[0] / 100 : -1;
+    taskENTER_CRITICAL(&battery_lock);
+    battery_charge_state.carried_minutes = carried_minutes;
+    taskEXIT_CRITICAL(&battery_lock);
+    vTaskDelay(pdMS_TO_TICKS(10000));
+    battery_flash_dump();
+    vTaskDelay(pdMS_TO_TICKS(BATTERY_LOG_INTERVAL_MS - 10000));
+    for (;;) {
+        taskENTER_CRITICAL(&battery_lock);
+        int count = battery_minute.count;
+        int average_mv = count ? (int)(battery_minute.sum_mv / count) : 0;
+        int min_mv = battery_minute.min_mv, max_mv = battery_minute.max_mv;
+        battery_minute.sum_mv = battery_minute.count = 0;
+        taskEXIT_CRITICAL(&battery_lock);
+        if (count) {
+            if (!span_valid || min_mv < span_min_mv) span_min_mv = min_mv;
+            if (!span_valid || max_mv > span_max_mv) span_max_mv = max_mv;
+            span_valid = true;
+        }
+        int smoothed_mv = battery_millivolts;
+        unsigned minute = (unsigned)(esp_timer_get_time() / 60000000);
+        bool playing = false;
+#ifdef PARAGRAPH_READER_MODE
+        if (playing_known) playing = !reader_paused;
+#endif
+        /* The level carried over from a charge counts down only while
+           reading, the load the discharge curve measures; once the voltage
+           has settled to it or below, the voltage alone gives the level. */
+        int voltage_minutes = smoothed_mv ? battery_minutes_left(smoothed_mv) : -1;
+        if (playing && carried_minutes > 0)
+            --carried_minutes;
+        if (carried_minutes >= 0 && voltage_minutes >= 0
+            && voltage_minutes <= carried_minutes)
+            carried_minutes = -1;
+        int level = voltage_minutes < 0 ? -1
+            : battery_percent_of_minutes(carried_minutes >= 0
+                                         ? carried_minutes : voltage_minutes);
+        battery_charge_phase_t phase = battery_charge_update(
+            &charge, minute, smoothed_mv, level);
+        int charge_percent = -1, charge_minutes = -1;
+        (void)battery_charge_estimate(&charge, &charge_percent,
+                                      &charge_minutes);
+        bool charging = phase == BATTERY_CHARGE_CLIMBING
+            || phase == BATTERY_CHARGE_HOLDING
+            || phase == BATTERY_CHARGE_CHARGING;
+        /* A new charge, or the charger, ends the carried level. */
+        if (phase != BATTERY_CHARGE_NONE) carried_minutes = -1;
+        taskENTER_CRITICAL(&battery_lock);
+        battery_charge_state.phase = phase;
+        battery_charge_state.percent = charge_percent;
+        battery_charge_state.minutes = charge_minutes;
+        battery_charge_state.samples = charge.samples;
+        battery_charge_state.first_mv = charge.recent_mv[0];
+        battery_charge_state.checked_mv = smoothed_mv;
+        battery_charge_state.carried_minutes = carried_minutes;
+        taskEXIT_CRITICAL(&battery_lock);
+        float celsius = 0;
+        int temperature_c = temperature_sensor
+                && temperature_sensor_get_celsius(temperature_sensor,
+                                                  &celsius) == ESP_OK
+            ? (int)(celsius + 0.5f) : -128;
+        int flags = (charging ? BATTERY_FLAG_CHARGING : 0)
+            | (playing ? BATTERY_FLAG_PLAYING : 0)
+            | (count ? 0 : BATTERY_FLAG_NO_READING);
+        /* Every minute while charging, so the next start can tell where a
+           charge stood when the charger was unplugged. */
+        bool log_now = flags != logged_flags || charging
+            || (count && abs(average_mv - logged_mv) >= BATTERY_LOG_STEP_MV)
+            || (count && average_mv < BATTERY_LOG_LOW_MV)
+            || minute - logged_minute >= BATTERY_LOG_HEARTBEAT_MINUTES;
+        printf("BATTERY_LOG minute=%u avg_mv=%d min_mv=%d max_mv=%d "
+               "smoothed_mv=%d percent=%d minutes_left=%d charge_phase=%d "
+               "charge_percent=%d minutes_to_full=%d carried_minutes=%d "
+               "temp_c=%d playing=%d logged=%d\n",
+               minute, average_mv, count ? min_mv : 0, count ? max_mv : 0,
+               smoothed_mv, level, voltage_minutes,
+               (int)phase, charge_percent, charge_minutes, carried_minutes,
+               temperature_c, playing, log_now);
+        if (log_now) {
+            BatteryRecord record = {
+                .magic = BATTERY_RECORD_MAGIC,
+                .session = battery_flash_session,
+                .minute = (uint16_t)(minute > 0xFFFF ? 0xFFFF : minute),
+                .millivolts = (uint16_t)average_mv,
+                .temperature_c = (int8_t)(temperature_c > 127 ? 127
+                                          : temperature_c),
+                .flags = (uint8_t)flags,
+            };
+            if (count && span_valid) {
+                int below = average_mv - span_min_mv;
+                int above = span_max_mv - average_mv;
+                record.below_mv = (uint8_t)(below > 255 ? 255 : below);
+                record.above_mv = (uint8_t)(above > 255 ? 255 : above);
+            }
+            if (battery_record_queue
+                && xQueueSend(battery_record_queue, &record, 0) != pdTRUE)
+                puts("BATTLOG queue full; record dropped");
+            if (count) logged_mv = average_mv;
+            logged_flags = flags;
+            logged_minute = minute;
+            span_valid = false;
+        }
+        vTaskDelay(pdMS_TO_TICKS(BATTERY_LOG_INTERVAL_MS));
+    }
+}
 
 extern const uint8_t locked_wav_start[]
     asm("_binary_locked_wav_start");
@@ -1993,6 +2806,7 @@ static void reader_save_preferences(void)
     (void)nvs_set_u32(reader_prefs, "statusmask", reader_status_enabled);
     (void)nvs_set_blob(reader_prefs, "statusorder", reader_status_order,
                        sizeof(reader_status_order));
+    (void)nvs_set_u8(reader_prefs, "statuslayout", READER_STATUS_LAYOUT);
     (void)nvs_commit(reader_prefs);
 }
 
@@ -2136,14 +2950,63 @@ static void reader_load_preferences(void)
                         &length) != ESP_OK)
             reader_recent_paths[i][0] = 0;
     }
+    uint8_t status_layout = 0;
+    (void)nvs_get_u8(reader_prefs, "statuslayout", &status_layout);
     uint32_t status_mask;
-    if (nvs_get_u32(reader_prefs, "statusmask", &status_mask) == ESP_OK)
-        reader_status_enabled = status_mask & ((1U << READER_STATUS_COUNT) - 1);
-    uint8_t saved_order[READER_STATUS_COUNT];
+    bool have_status_mask =
+        nvs_get_u32(reader_prefs, "statusmask", &status_mask) == ESP_OK;
+    /* One spare byte reads an order saved by the nine-item layout. */
+    uint8_t saved_order[READER_STATUS_COUNT + 1];
     size_t saved_order_size = sizeof(saved_order);
-    if (nvs_get_blob(reader_prefs, "statusorder", saved_order,
-                     &saved_order_size) == ESP_OK
-        && saved_order_size == sizeof(saved_order)) {
+    bool have_status_order =
+        nvs_get_blob(reader_prefs, "statusorder", saved_order,
+                     &saved_order_size) == ESP_OK;
+    if (status_layout < READER_STATUS_LAYOUT
+        && (have_status_mask || have_status_order)) {
+        /* Fold the old battery time item into the battery item and move the
+           items after it up one place. */
+        if (have_status_mask) {
+            uint32_t below = status_mask
+                & ((1U << READER_STATUS_OLD_BATTERY_TIME) - 1);
+            uint32_t above = status_mask
+                >> (READER_STATUS_OLD_BATTERY_TIME + 1);
+            if (status_mask & (1U << READER_STATUS_OLD_BATTERY_TIME))
+                below |= 1U << READER_STATUS_BATTERY;
+            status_mask = below | above << READER_STATUS_OLD_BATTERY_TIME;
+        }
+        if (have_status_order) {
+            size_t kept = 0;
+            for (size_t i = 0; i < saved_order_size; ++i) {
+                uint8_t item = saved_order[i];
+                if (item == READER_STATUS_OLD_BATTERY_TIME) continue;
+                saved_order[kept++] =
+                    item > READER_STATUS_OLD_BATTERY_TIME ? item - 1 : item;
+            }
+            /* Items the old list lacked, such as device temperature in
+               eight-item orders, go at the end. */
+            for (uint8_t item = 0; item < READER_STATUS_COUNT; ++item) {
+                bool present = false;
+                for (size_t i = 0; i < kept; ++i)
+                    present |= saved_order[i] == item;
+                if (!present && kept < READER_STATUS_COUNT)
+                    saved_order[kept++] = item;
+            }
+            saved_order_size = kept;
+        }
+        if (have_status_mask)
+            (void)nvs_set_u32(reader_prefs, "statusmask", status_mask);
+        if (have_status_order)
+            (void)nvs_set_blob(reader_prefs, "statusorder", saved_order,
+                               saved_order_size);
+        (void)nvs_set_u8(reader_prefs, "statuslayout", READER_STATUS_LAYOUT);
+        (void)nvs_commit(reader_prefs);
+        printf("STATUS_LAYOUT converted to %d mask=0x%lx\n",
+               READER_STATUS_LAYOUT,
+               have_status_mask ? (unsigned long)status_mask : 0UL);
+    }
+    if (have_status_mask)
+        reader_status_enabled = status_mask & ((1U << READER_STATUS_COUNT) - 1);
+    if (have_status_order && saved_order_size == READER_STATUS_COUNT) {
         uint32_t seen = 0;
         bool valid = true;
         for (size_t i = 0; i < READER_STATUS_COUNT; ++i) {
@@ -2155,7 +3018,8 @@ static void reader_load_preferences(void)
             seen |= 1U << saved_order[i];
         }
         if (valid)
-            memcpy(reader_status_order, saved_order, sizeof(saved_order));
+            memcpy(reader_status_order, saved_order,
+                   sizeof(reader_status_order));
     }
     printf("PREFERENCES rate=%d volume=%d interface_sounds=%d remaining_scope=%s section_pause=%d startup_resume=%d sleep_choice=%u sleep_key=%d sleep_boot=%d unlock=%d sort=%d recents=%d\n",
            reader_rate, reader_volume,
@@ -3604,8 +4468,7 @@ static const char *reader_status_name(unsigned field)
 {
     static const char *const names[READER_STATUS_COUNT] = {
         "time", "date", "remaining section duration",
-        "remaining file duration", "battery level",
-        "battery time estimate", "sleep time remaining",
+        "remaining file duration", "battery", "sleep time remaining",
         "remaining SD card space", "device temperature",
     };
     return field < READER_STATUS_COUNT ? names[field] : "status";
@@ -4084,6 +4947,126 @@ static bool reader_status_device_temperature(void)
     return true;
 }
 
+/* A time estimate rounded to a step that matches how good it is, in words:
+   "7 minutes", "45 minutes", "1 hour", "2 hours 10 minutes". */
+static void reader_battery_time(unsigned minutes, char *out, size_t size)
+{
+    if (minutes >= 60) minutes = (minutes + 5) / 10 * 10;
+    else if (minutes >= 10) minutes = (minutes + 2) / 5 * 5;
+    if (minutes < 60)
+        snprintf(out, size, "%u minute%s", minutes, minutes == 1 ? "" : "s");
+    else if (minutes % 60 == 0)
+        snprintf(out, size, "%u hour%s", minutes / 60,
+                 minutes / 60 == 1 ? "" : "s");
+    else
+        snprintf(out, size, "%u hour%s %u minutes", minutes / 60,
+                 minutes / 60 == 1 ? "" : "s", minutes % 60);
+}
+
+/* Speaks the level and the reading time left, such as "battery 65 percent,
+   about 2 hours 10 minutes left".  While charging, the voltage is lifted by
+   the charger, so it speaks battery_charge.c's estimate instead, such as
+   "battery charging, about 40 percent, about 50 minutes to full". */
+static bool reader_status_battery(void)
+{
+    static int spoken_percent = -1;
+    int millivolts = battery_millivolts;
+    if (!millivolts) {
+        spoken_percent = -1;
+        return false;
+    }
+    taskENTER_CRITICAL(&battery_lock);
+    battery_charge_phase_t phase = battery_charge_state.phase;
+    int charge_percent = battery_charge_state.percent;
+    int charge_minutes = battery_charge_state.minutes;
+    unsigned charge_samples = battery_charge_state.samples;
+    int first_mv = battery_charge_state.first_mv;
+    int checked_mv = battery_charge_state.checked_mv;
+    int carried_minutes = battery_charge_state.carried_minutes;
+    taskEXIT_CRITICAL(&battery_lock);
+    char left[48];
+    /* The reading jumped since the last check, which runs once a minute:
+       the charger went on, or the battery was switched with it in. */
+    if (charge_samples && checked_mv
+        && abs(millivolts - checked_mv) >= BATTERY_CHARGE_JUMP_MV) {
+        spoken_percent = -1;
+        strlcpy(reader_announcement, "battery charge estimating",
+                sizeof(reader_announcement));
+        return true;
+    }
+    if (phase == BATTERY_CHARGE_NONE
+        && charge_samples < BATTERY_UNSURE_MINUTES
+        && millivolts < BATTERY_CHARGE_HOLD_MV
+        && (millivolts >= BATTERY_UNSURE_HIGH_MV
+            || (charge_samples
+                && millivolts - first_mv >= BATTERY_UNSURE_RISE_MV))) {
+        spoken_percent = -1;
+        strlcpy(reader_announcement, "battery charge estimating",
+                sizeof(reader_announcement));
+        return true;
+    }
+    /* Until the first minute's check, a reading at the charger's hold is
+       taken as being on the charger too. */
+    if (phase == BATTERY_CHARGE_ON_CHARGER
+        || (phase == BATTERY_CHARGE_NONE
+            && millivolts >= BATTERY_CHARGE_HOLD_MV)) {
+        spoken_percent = -1;
+        strlcpy(reader_announcement, "battery on charger",
+                sizeof(reader_announcement));
+        return true;
+    }
+    if (phase == BATTERY_CHARGE_CHARGING) {
+        spoken_percent = -1;
+        strlcpy(reader_announcement, "battery charging",
+                sizeof(reader_announcement));
+        return true;
+    }
+    /* Only a charge being followed has an estimate. */
+    if ((phase == BATTERY_CHARGE_CLIMBING || phase == BATTERY_CHARGE_HOLDING)
+        && charge_percent >= 0 && charge_minutes >= 0) {
+        spoken_percent = -1;
+        int level = (charge_percent + 2) / 5 * 5;
+        if (charge_minutes <= 2) {
+            strlcpy(reader_announcement, "battery charging, nearly full",
+                    sizeof(reader_announcement));
+        } else {
+            reader_battery_time((unsigned)charge_minutes, left, sizeof(left));
+            if (level > 0)
+                snprintf(reader_announcement, sizeof(reader_announcement),
+                         "battery charging, about %d percent, about %s to full",
+                         level, left);
+            else
+                snprintf(reader_announcement, sizeof(reader_announcement),
+                         "battery charging, about %s to full", left);
+        }
+        return true;
+    }
+    /* Voltage-based estimates are only good to a few percent, so speak the
+       nearest five, and keep the previous value until the estimate has moved
+       well past it, so the level does not flick between two steps. */
+    int voltage_minutes = battery_minutes_left(millivolts);
+    if (carried_minutes >= 0 && carried_minutes < voltage_minutes)
+        voltage_minutes = carried_minutes; /* settling after a charge */
+    int percent = battery_percent_of_minutes(voltage_minutes);
+    if (spoken_percent < 0 || abs(percent - spoken_percent) >= 4)
+        spoken_percent = (percent + 2) / 5 * 5;
+    unsigned minutes = (unsigned)voltage_minutes;
+    if (minutes < 1) {
+        strlcpy(reader_announcement, "battery almost empty",
+                sizeof(reader_announcement));
+        return true;
+    }
+    char level[24];
+    if (spoken_percent > 0)
+        snprintf(level, sizeof(level), "%d percent", spoken_percent);
+    else
+        strlcpy(level, "almost empty", sizeof(level));
+    reader_battery_time(minutes, left, sizeof(left));
+    snprintf(reader_announcement, sizeof(reader_announcement),
+             "battery %s, about %s left", level, left);
+    return true;
+}
+
 static bool reader_prepare_status(unsigned field)
 {
     switch (field) {
@@ -4091,8 +5074,7 @@ static bool reader_prepare_status(unsigned field)
     case READER_STATUS_DATE: return reader_status_date();
     case READER_STATUS_SECTION_REMAINING: return reader_status_remaining(true);
     case READER_STATUS_FILE_REMAINING: return reader_status_remaining(false);
-    case READER_STATUS_BATTERY_LEVEL:
-    case READER_STATUS_BATTERY_TIME: return false;
+    case READER_STATUS_BATTERY: return reader_status_battery();
     case READER_STATUS_SLEEP_REMAINING: return reader_status_sleep_timer();
     case READER_STATUS_SD_SPACE: return reader_status_sd_space();
     case READER_STATUS_DEVICE_TEMPERATURE:
@@ -4774,6 +5756,7 @@ static void reader_button_scan_task(void *argument)
     TickType_t interface_spoken_at = 0;
 
     for (;;) {
+        battery_poll(buttons);
         int raw = 0;
         int millivolts = 3300;
         if (adc_oneshot_read(buttons->adc, BUTTON_ADC_CHANNEL, &raw) == ESP_OK)
@@ -5752,7 +6735,7 @@ static void reader_perform_unlock_action(speech_engine_t *instance,
         strlcpy(time_text, reader_announcement, sizeof(time_text));
     }
     if (want_battery) {
-        if (!reader_prepare_status(READER_STATUS_BATTERY_LEVEL))
+        if (!reader_prepare_status(READER_STATUS_BATTERY))
             strlcpy(reader_announcement, "battery unavailable",
                     sizeof(reader_announcement));
         if (want_time) {
@@ -6617,6 +7600,17 @@ void app_main(void)
     ESP_ERROR_CHECK(adc_cali_create_scheme_curve_fitting(&cal_cfg,
                                                           &calibration));
     buttons.calibration = calibration;
+    /* Battery sensing is optional: a failure leaves the battery status
+       unavailable rather than stopping the reader. */
+    adc_cali_curve_fitting_config_t battery_cal_cfg = cal_cfg;
+    battery_cal_cfg.chan = BATTERY_ADC_CHANNEL;
+    if (adc_oneshot_config_channel(buttons.adc, BATTERY_ADC_CHANNEL,
+                                   &adc_channel_cfg) != ESP_OK
+        || adc_cali_create_scheme_curve_fitting(
+               &battery_cal_cfg, &buttons.battery_calibration) != ESP_OK) {
+        buttons.battery_calibration = NULL;
+        puts("BATTERY sensing unavailable");
+    }
 
     reader_pcm_capacity = READER_PCM_BYTES / sizeof(int16_t);
     reader_pcm = heap_caps_malloc(reader_pcm_capacity * sizeof(int16_t),
@@ -6648,6 +7642,13 @@ void app_main(void)
         reader_button_scan_task, "reader_buttons", 8192,
         &buttons, 5, NULL, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     ESP_ERROR_CHECK(buttons_created == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
+    battery_flash_init();
+    /* The logger only queues records; app_main does the flash writes, so a
+       PSRAM stack is safe here. */
+    if (xTaskCreateWithCaps(battery_log_task, "battery_log", 6144,
+                            (void *)1, 1, NULL,
+                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS)
+        puts("BATTERY_LOG task unavailable");
     if (library_result == ESP_OK) {
         if (!reader_resume_last_book())
             reader_speak_library_item();
@@ -6694,6 +7695,9 @@ void app_main(void)
             && reader_paused && !reader_rendering
             && !reader_play_task_running && !reader_ui_busy)
             reader_flush_pending_nvs();
+        battery_flash_service(reader_paused && !reader_rendering
+                              && !reader_play_task_running
+                              && !reader_ui_busy);
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 }

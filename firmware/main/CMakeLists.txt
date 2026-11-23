@@ -64,6 +64,7 @@ set(APP_SOURCES
     "transfer_mode.c"
     "transfer_web.c"
     "epub_text.c"
+    "battery_charge.c"
     "speech_engine_common.c"
     )
 
