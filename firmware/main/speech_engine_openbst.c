@@ -4,7 +4,7 @@
 #include <string.h>
 
 #include "bst.h"
-#include "esp_heap_caps.h"
+#include "openbst_numbers.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -14,7 +14,6 @@
 #ifndef RR_ENGINE_SAMPLE_RATE
 #define RR_ENGINE_SAMPLE_RATE 10000
 #endif
-#define OPENBST_BLOCK_SAMPLES 2048
 
 struct speech_engine {
     speech_engine_config_t config;
@@ -24,6 +23,7 @@ struct speech_engine {
     int top;
     int level;
     int voice;
+    int volume;
     bool busy;
     bool abort;
     bool marker_pending;
@@ -32,6 +32,10 @@ struct speech_engine {
 
 static const speech_setting_info_t settings[] = {
     { SPEECH_SETTING_RATE, "speaking rate", 60, 140, 5, 100, false,
+      NULL, NULL },
+    /* OpenBST has no volume of its own and is loud next to the other
+       engines; the adapter scales its samples. */
+    { SPEECH_SETTING_ENGINE_VOLUME, "voice volume", 0, 100, 5, 70, false,
       NULL, NULL },
     { SPEECH_SETTING_VOICE, "voice", 1, 6, 1, 1, false, NULL, NULL },
     { SPEECH_SETTING_PITCH, "pitch", 40, 120, 5, 80, false, NULL, NULL },
@@ -76,6 +80,7 @@ speech_engine_t *speech_engine_create(const speech_engine_config_t *config)
     engine->top = 160;
     engine->level = 6;
     engine->voice = 1;
+    engine->volume = 70;
     engine->instance = bst_open(OPENBST_BUILD_NAME);
     if (!engine->instance) {
         free(engine);
@@ -108,40 +113,74 @@ unsigned speech_engine_sample_rate(const speech_engine_t *engine)
     return engine ? RR_ENGINE_SAMPLE_RATE : 0;
 }
 
-bool speech_engine_synthesize(speech_engine_t *engine, const char *text)
+/* OpenBST patched with bst_say_stream (firmware/tools/patch_openbst_speak.py
+   and patch_openbst_frames.py).  The engine hands over each piece of sound,
+   at most 256 samples, as it makes it.
+   Stock bst_say made the whole utterance twice (bst_length to size the
+   buffer, then bst_say) before any of it could be played. */
+extern long bst_say_stream(bst *h, const char *text,
+                           int (*sink)(const int16_t *pcm, long n, void *ctx),
+                           void *ctx);
+
+typedef struct {
+    speech_engine_t *engine;
+    bool stopped;
+    unsigned pieces;
+} openbst_stream_t;
+
+static int openbst_sink(const int16_t *pcm, long n, void *context)
 {
-    if (!engine || !engine->instance || !text) return false;
-    engine->busy = true;
-    engine->abort = false;
-    long wanted = bst_length(engine->instance, text);
-    if (wanted < 0 || (size_t)wanted > SIZE_MAX / sizeof(int16_t)) {
-        engine->busy = false;
-        return false;
-    }
-    size_t allocation = (size_t)(wanted ? wanted : 1) * sizeof(int16_t);
-    int16_t *pcm = heap_caps_malloc(allocation,
-                                    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!pcm) {
-        engine->busy = false;
-        return false;
-    }
-    long generated = bst_say(engine->instance, text, pcm, wanted);
-    bool ok = generated >= 0;
-    if (ok && generated > 0 && engine->marker_pending && engine->config.marker) {
+    openbst_stream_t *stream = context;
+    speech_engine_t *engine = stream->engine;
+    if (!stream->pieces++ && engine->marker_pending && engine->config.marker) {
         engine->config.marker(engine->pending_marker, engine->config.context);
         engine->marker_pending = false;
     }
-    for (long at = 0; ok && at < generated && !engine->abort;
-         at += OPENBST_BLOCK_SAMPLES) {
-        size_t count = (size_t)(generated - at);
-        if (count > OPENBST_BLOCK_SAMPLES) count = OPENBST_BLOCK_SAMPLES;
-        ok = engine->config.pcm(pcm + at, count, engine->config.context);
-        if (((unsigned long)at / OPENBST_BLOCK_SAMPLES & 31u) == 31u)
-            vTaskDelay(1);
+    const int16_t *out = pcm;
+    int16_t scaled[256]; /* a piece is at most BST_PCM_COUNT, 256, samples */
+    if (engine->volume != 100 && n <= (long)(sizeof(scaled) / sizeof(scaled[0]))) {
+        for (long i = 0; i < n; ++i)
+            scaled[i] = (int16_t)((int32_t)pcm[i] * engine->volume / 100);
+        out = scaled;
     }
-    heap_caps_free(pcm);
+    if (engine->abort
+        || !engine->config.pcm(out, (size_t)n, engine->config.context)) {
+        stream->stopped = true;
+        return 0;
+    }
+    /* Rendering a book into PSRAM never blocks, so give the idle task a
+       turn now and then, as the old hand-out loop did. */
+    if ((stream->pieces & 63u) == 0)
+        vTaskDelay(1);
+    return 1;
+}
+
+bool speech_engine_synthesize(speech_engine_t *engine, const char *text)
+{
+    if (!engine || !engine->instance || !text) return false;
+    /* The English builds (1995 and the ...ENG ones) get numbers spelled out
+       in English words first; see openbst_numbers.h. */
+    static const char build[] = OPENBST_BUILD_NAME;
+    size_t build_length = sizeof(build) - 1;
+    bool english = !strcmp(build, "1995")
+        || (build_length > 3 && !strcmp(build + build_length - 3, "ENG"));
+    char *spelled = NULL;
+    if (english) {
+        /* A digit can become a dozen letters ("999999999"). */
+        size_t capacity = strlen(text) * 12 + 16;
+        spelled = malloc(capacity);
+        if (spelled) {
+            openbst_spell_numbers(text, spelled, capacity);
+            text = spelled;
+        }
+    }
+    engine->busy = true;
+    engine->abort = false;
+    openbst_stream_t stream = { engine, false, 0 };
+    long made = bst_say_stream(engine->instance, text, openbst_sink, &stream);
+    free(spelled);
     engine->busy = false;
-    return ok && !engine->abort;
+    return made >= 0 && !stream.stopped && !engine->abort;
 }
 
 bool speech_engine_insert_marker(speech_engine_t *engine, uint32_t marker)
@@ -179,6 +218,11 @@ bool speech_engine_set(speech_engine_t *engine, speech_setting_id_t setting,
 {
     if (!engine) return false;
     switch (setting) {
+    case SPEECH_SETTING_ENGINE_VOLUME:
+        /* Applied to each sample as it is passed on; nothing to tell BST. */
+        if (value < 0 || value > 100) return false;
+        engine->volume = value;
+        return true;
     case SPEECH_SETTING_RATE: engine->rate = value; break;
     case SPEECH_SETTING_VOICE: engine->voice = value; break;
     case SPEECH_SETTING_PITCH: engine->pitch = value; break;
@@ -196,6 +240,7 @@ bool speech_engine_get(speech_engine_t *engine, speech_setting_id_t setting,
 {
     if (!engine || !value) return false;
     switch (setting) {
+    case SPEECH_SETTING_ENGINE_VOLUME: *value = engine->volume; return true;
     case SPEECH_SETTING_RATE: *value = engine->rate; return true;
     case SPEECH_SETTING_VOICE: *value = engine->voice; return true;
     case SPEECH_SETTING_PITCH: *value = engine->pitch; return true;

@@ -123,13 +123,34 @@ elseif(RR_SPEECH_ENGINE STREQUAL "openbst")
     endif()
     set(OPENBST_MODULES
         text dict lts cursors wordstream stress assemble tokenise translit
-        except numbers phrules accents pairs contour diphone frames interp
-        synth speak)
+        except numbers phrules accents pairs contour diphone interp
+        synth)
     foreach(MODULE IN LISTS OPENBST_MODULES)
         list(APPEND OPENBST_SOURCES "${OPENBST_ROOT}/src/${MODULE}.c")
     endforeach()
+    # speak.c and frames.c are patched so that OpenBST hands out each piece of
+    # sound as it makes it, through bst_say_stream, instead of building the
+    # whole utterance first.
+    # Speech then starts as soon as its first sound is ready.
+    idf_build_get_property(OPENBST_PYTHON PYTHON)
+    set(OPENBST_TOOLS "${CMAKE_CURRENT_LIST_DIR}/../tools")
+    foreach(MODULE speak frames)
+        set(PATCHED "${CMAKE_CURRENT_BINARY_DIR}/openbst_${MODULE}_patched.c")
+        execute_process(
+            COMMAND "${OPENBST_PYTHON}" "${OPENBST_TOOLS}/patch_openbst_${MODULE}.py"
+                    "${OPENBST_ROOT}/src/${MODULE}.c" "${PATCHED}"
+            RESULT_VARIABLE PATCH_RESULT)
+        if(NOT PATCH_RESULT EQUAL 0)
+            message(FATAL_ERROR "Patching OpenBST ${MODULE}.c failed")
+        endif()
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+            "${OPENBST_TOOLS}/patch_openbst_${MODULE}.py"
+            "${OPENBST_ROOT}/src/${MODULE}.c")
+        list(APPEND OPENBST_SOURCES "${PATCHED}")
+    endforeach()
     list(APPEND APP_SOURCES
         "speech_engine_openbst.c"
+        "openbst_numbers.c"
         "openbst_2006eng_index.c"
         "${OPENBST_ROOT}/src/data/${RR_OPENBST_BUILD}.c"
         ${OPENBST_SOURCES})
